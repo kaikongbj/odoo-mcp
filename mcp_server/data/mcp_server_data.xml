@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- 演示服务器数据 -->
+        <record id="demo_mcp_server_1" model="mcp.server">
+            <field name="name">演示服务器 1</field>
+            <field name="server_url">https://demo-mcp1.example.com</field>
+            <field name="api_key">demo_key_123456</field>
+            <field name="state">active</field>
+            <field name="note">这是一个演示MCP服务器，用于测试目的。</field>
+        </record>
+
+        <record id="demo_mcp_server_2" model="mcp.server">
+            <field name="name">演示服务器 2</field>
+            <field name="server_url">https://demo-mcp2.example.com</field>
+            <field name="api_key">demo_key_abcdef</field>
+            <field name="state">draft</field>
+            <field name="note">另一个演示MCP服务器，处于草稿状态。</field>
+        </record>
+
+        <!-- 演示资源数据 -->
+        <record id="demo_mcp_resource_1" model="mcp.resource">
+            <field name="name">配置文件</field>
+            <field name="resource_uri">/api/config</field>
+            <field name="server_id" ref="demo_mcp_server_1"/>
+            <field name="resource_type">file</field>
+            <field name="description">服务器配置文件</field>
+            <field name="content">{"server_name": "demo-mcp1", "version": "1.0", "max_connections": 100}</field>
+        </record>
+
+        <record id="demo_mcp_resource_2" model="mcp.resource">
+            <field name="name">状态服务</field>
+            <field name="resource_uri">/api/status</field>
+            <field name="server_id" ref="demo_mcp_server_1"/>
+            <field name="resource_type">service</field>
+            <field name="description">服务器状态检查服务</field>
+        </record>
+
+        <record id="demo_mcp_resource_3" model="mcp.resource">
+            <field name="name">用户API</field>
+            <field name="resource_uri">/api/users</field>
+            <field name="server_id" ref="demo_mcp_server_2"/>
+            <field name="resource_type">api</field>
+            <field name="description">用户管理API</field>
+        </record>
+    </data>
+</odoo>

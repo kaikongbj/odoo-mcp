@@ -1,0 +1,27 @@
+{
+  "clientId": "b7df8f44-8f44-5f8f4430698-8f8f443069809e4-809e4c2a",
+  "currentIndex": 0,
+  "tabs": [
+    {
+      "name": "工具",
+      "icon": "icon-tool",
+      "type": "blank",
+      "componentIndex": 2,
+      "storage": {
+        "activeNames": [
+          0
+        ],
+        "formData": {
+          "model_name": "res.users",
+          "domain": "",
+          "fields": "",
+          "limit": 0,
+          "offset": 0,
+          "order": ""
+        },
+        "currentToolName": "query_odoo_model",
+        "lastToolCallResponse": "McpError: MCP error -32001: Request timed out"
+      }
+    }
+  ]
+}

@@ -1,0 +1,219 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- MCP资源搜索视图 -->
+    <record id="view_mcp_resource_search" model="ir.ui.view">
+        <field name="name">mcp.resource.search</field>
+        <field name="model">mcp.resource</field>
+        <field name="arch" type="xml">
+            <search string="MCP资源">
+                <field name="name"/>
+                <field name="resource_uri"/>
+                <field name="server_id"/>
+                <filter string="文件" name="type_file" domain="[('resource_type', '=', 'file')]"/>
+                <filter string="服务" name="type_service" domain="[('resource_type', '=', 'service')]"/>
+                <filter string="API" name="type_api" domain="[('resource_type', '=', 'api')]"/>
+                <filter string="其他" name="type_other" domain="[('resource_type', '=', 'other')]"/>
+                <filter string="已归档" name="inactive" domain="[('active', '=', False)]"/>
+                <group expand="0" string="分组">
+                    <filter string="服务器" name="groupby_server" domain="[]" context="{'group_by': 'server_id'}"/>
+                    <filter string="资源类型" name="groupby_type" domain="[]" context="{'group_by': 'resource_type'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <!-- MCP资源列表视图 -->
+    <record id="view_mcp_resource_tree" model="ir.ui.view">
+        <field name="name">mcp.resource.tree</field>
+        <field name="model">mcp.resource</field>
+        <field name="arch" type="xml">
+            <tree string="MCP资源" decoration-muted="active==False">
+                <field name="active" invisible="1"/>
+                <field name="name"/>
+                <field name="server_id"/>
+                <field name="resource_uri"/>
+                <field name="resource_type"/>
+                <field name="last_fetch"/>
+            </tree>
+        </field>
+    </record>
+
+    <!-- MCP资源表单视图 -->
+    <record id="view_mcp_resource_form" model="ir.ui.view">
+        <field name="name">mcp.resource.form</field>
+        <field name="model">mcp.resource</field>
+        <field name="arch" type="xml">
+            <form string="MCP资源">
+                <header>
+                    <button name="action_fetch_resource" string="获取资源" type="object" class="oe_highlight"/>
+                </header>
+                <sheet>
+                    <field name="active" invisible="1"/>
+                    <widget name="web_ribbon" title="已归档" bg_color="bg-danger" invisible="active"/>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="name" placeholder="资源名称"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="server_id"/>
+                            <field name="resource_uri"/>
+                            <field name="resource_type"/>
+                        </group>
+                        <group>
+                            <field name="last_fetch" readonly="1"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="描述" name="description">
+                            <field name="description" placeholder="在此输入描述..."/>
+                        </page>
+                        <page string="内容" name="content">
+                            <field name="content" placeholder="资源内容..."/>
+                        </page>
+                    </notebook>
+                </sheet>
+                <div class="oe_chatter">
+                    <field name="message_follower_ids" widget="mail_followers"/>
+                    <field name="activity_ids" widget="mail_activity"/>
+                    <field name="message_ids" widget="mail_thread"/>
+                </div>
+            </form>
+        </field>
+    </record>
+
+    <!-- MCP资源动作 -->
+    <record id="action_mcp_resource_list" model="ir.actions.act_window">
+        <field name="name">MCP资源</field>
+        <field name="res_model">mcp.resource</field>
+        <field name="view_mode">tree,form</field>
+        <field name="search_view_id" ref="view_mcp_resource_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                创建第一个MCP资源
+            </p>
+            <p>
+                MCP资源代表可以从MCP服务器获取的各种资源。
+            </p>
+        </field>
+    </record>
+
+    <!-- MCP服务器视图 -->
+    <record id="view_mcp_server_form" model="ir.ui.view">
+        <field name="name">mcp.server.form</field>
+        <field name="model">mcp.server</field>
+        <field name="arch" type="xml">
+            <form string="MCP服务器">
+                <header>
+                    <button name="action_activate" string="激活" type="object" class="oe_highlight"
+                            invisible="state == 'active'"/>
+                    <button name="action_deactivate" string="停用" type="object" invisible="state == 'inactive'"/>
+                    <button name="action_test_connection" string="测试连接" type="object" class="btn-secondary"/>
+                    <field name="state" widget="statusbar" statusbar_visible="draft,active,inactive"/>
+                </header>
+                <sheet>
+                    <div class="oe_button_box" name="button_box">
+                        <button name="%(mcp_server.action_mcp_resource_list)d" type="action"
+                                class="oe_stat_button" icon="fa-cubes"
+                                context="{'search_default_server_id': active_id}">
+                            <field name="resource_count" widget="statinfo" string="资源"/>
+                        </button>
+                    </div>
+                    <field name="active" invisible="1"/>
+                    <widget name="web_ribbon" title="已归档" bg_color="bg-danger" invisible="active"/>
+                    <div class="oe_title">
+                        <h1>
+                            <field name="name" placeholder="服务器名称"/>
+                        </h1>
+                    </div>
+                    <group>
+                        <group>
+                            <field name="server_url" placeholder="例如: https://mcp-server.example.com"/>
+                            <field name="api_key" password="True"/>
+                        </group>
+                        <group>
+                            <field name="last_connection" readonly="1"/>
+                            <field name="connection_count" readonly="1"/>
+                        </group>
+                    </group>
+                    <notebook>
+                        <page string="备注" name="notes">
+                            <field name="note" placeholder="在此输入备注..."/>
+                        </page>
+                        <page string="资源" name="resources">
+                            <field name="resource_ids" widget="one2many">
+                                <tree string="资源">
+                                    <field name="name"/>
+                                    <field name="resource_uri"/>
+                                    <field name="resource_type"/>
+                                    <field name="last_fetch"/>
+                                </tree>
+                            </field>
+                        </page>
+                    </notebook>
+                </sheet>
+                <div class="oe_chatter">
+                    <field name="message_follower_ids" widget="mail_followers"/>
+                    <field name="activity_ids" widget="mail_activity"/>
+                    <field name="message_ids" widget="mail_thread"/>
+                </div>
+            </form>
+        </field>
+    </record>
+
+    <record id="view_mcp_server_tree" model="ir.ui.view">
+        <field name="name">mcp.server.tree</field>
+        <field name="model">mcp.server</field>
+        <field name="arch" type="xml">
+            <tree string="MCP服务器" decoration-muted="active==False" decoration-danger="state=='inactive'"
+                  decoration-info="state=='draft'" decoration-success="state=='active'">
+                <field name="active" invisible="1"/>
+                <field name="name"/>
+                <field name="server_url"/>
+                <field name="state"/>
+                <field name="last_connection"/>
+                <field name="resource_count"/>
+            </tree>
+        </field>
+    </record>
+
+    <record id="view_mcp_server_search" model="ir.ui.view">
+        <field name="name">mcp.server.search</field>
+        <field name="model">mcp.server</field>
+        <field name="arch" type="xml">
+            <search string="MCP服务器">
+                <field name="name"/>
+                <field name="server_url"/>
+                <filter string="活动服务器" name="active_servers" domain="[('state', '=', 'active')]"/>
+                <filter string="草稿" name="draft_servers" domain="[('state', '=', 'draft')]"/>
+                <filter string="停用" name="inactive_servers" domain="[('state', '=', 'inactive')]"/>
+                <filter string="已归档" name="inactive" domain="[('active', '=', False)]"/>
+                <group expand="0" string="分组">
+                    <filter string="状态" name="groupby_state" domain="[]" context="{'group_by': 'state'}"/>
+                </group>
+            </search>
+        </field>
+    </record>
+
+    <record id="action_mcp_server_list" model="ir.actions.act_window">
+        <field name="name">MCP服务器</field>
+        <field name="res_model">mcp.server</field>
+        <field name="view_mode">tree,form</field>
+        <field name="search_view_id" ref="view_mcp_server_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                创建第一个MCP服务器
+            </p>
+            <p>
+                MCP服务器用于管理和连接到外部资源。
+            </p>
+        </field>
+    </record>
+
+    <!-- 菜单项 -->
+    <menuitem id="menu_mcp_root" name="MCP服务器" web_icon="mcp_server,static/description/icon.png" sequence="100"/>
+    <menuitem id="menu_mcp_server" name="服务器" parent="menu_mcp_root" action="action_mcp_server_list" sequence="10"/>
+    <menuitem id="menu_mcp_resource" name="资源" parent="menu_mcp_root" action="action_mcp_resource_list"
+              sequence="20"/>
+</odoo>

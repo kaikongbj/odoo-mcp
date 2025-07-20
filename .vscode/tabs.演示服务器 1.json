@@ -20,7 +20,15 @@
           "order": ""
         },
         "currentToolName": "query_odoo_model",
-        "lastToolCallResponse": "McpError: MCP error -32001: Request timed out"
+        "lastToolCallResponse": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\n  \"status\": \"error\",\n  \"message\": \"查询Odoo模型失败: Cursor already closed\"\n}"
+            }
+          ],
+          "isError": false
+        }
       }
     }
   ]

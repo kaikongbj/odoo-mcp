@@ -165,27 +165,11 @@ FastMCP框架允许您注册工具和资源，以供大型语言模型(LLM)使�
 
 **工具示例**:
 
-```python
-@mcp_server.tool()
-async def multiply(a: float, b: float, ctx: Context) -> float:
-    """将两个数字相乘"""
-    result = a * b
-    await ctx.info(f"计算结果: {a} * {b} = {result}")
-    return result
-```
+要创建工具，请在 `services/fast_mcp_service.py` 中使用 `@mcp_server.tool()` 装饰器定义一个异步函数。
 
 **资源示例**:
 
-```python
-@mcp_server.resource("config://settings")
-def get_settings():
-    """获取配置设置"""
-    return {
-        "version": "1.0",
-        "max_connections": 100,
-        "timeout": 30
-    }
-```
+要创建资源，请在 `services/fast_mcp_service.py` 中使用 `@mcp_server.resource()` 装饰器定义一个函数。
 
 ## 高级配置
 
@@ -193,25 +177,9 @@ def get_settings():
 
 您可以在`fast_mcp_service.py`中的`_register_default_tools`方法中添加自定义工具:
 
-```python
-@mcp_server.tool()
-async def custom_tool(param1: str, param2: int, ctx: Context) -> Dict[str, Any]:
-    """自定义工具说明"""
-    # 工具实现...
-    return {"result": "..."}
-```
-
 ### 自定义资源
 
 您可以在`fast_mcp_service.py`中的`_register_default_resources`方法中添加自定义资源:
-
-```python
-@mcp_server.resource("custom://resource/{param}")
-def custom_resource(param: str):
-    """自定义资源说明"""
-    # 资源实现...
-    return {"data": "..."}
-```
 
 ## 故障排除
 

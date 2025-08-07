@@ -106,17 +106,46 @@
         <field name="arch" type="xml">
             <form string="MCP服务器">
                 <header>
-                    <button name="action_activate" string="激活" type="object" class="oe_highlight"
-                            invisible="state == 'active'"/>
-                    <button name="action_deactivate" string="停用" type="object" invisible="state == 'inactive'"/>
-                    <button name="action_test_connection" string="测试连接" type="object" class="btn-secondary"/>
+                    <!-- 启动按钮 - 只在非活动状态显示 -->
+                    <button name="action_activate" string="启动服务器" type="object"
+                            class="oe_highlight" icon="fa-play"
+                            invisible="state == 'active'"
+                            help="启动MCP服务器实例"/>
+
+                    <!-- 停止按钮 - 只在活动状态显示 -->
+                    <button name="action_deactivate" string="停止服务器" type="object"
+                            class="btn-danger" icon="fa-stop"
+                            invisible="state != 'active'"
+                            help="停止MCP服务器实例"/>
+
+                    <!-- 重启按钮 - 只在活动状态显示 -->
+                    <button name="action_restart" string="重启服务器" type="object"
+                            class="btn-warning" icon="fa-refresh"
+                            invisible="state != 'active'"
+                            help="重启MCP服务器实例"/>
+
+                    <!-- 状态检查按钮 -->
+                    <button name="action_get_server_status" string="检查状态" type="object"
+                            class="btn-info" icon="fa-info-circle"
+                            help="获取服务器详细状态信息"/>
+
+                    <!-- 端口检查按钮 -->
+                    <button name="action_check_port_availability" string="检查端口" type="object"
+                            class="btn-secondary" icon="fa-plug"
+                            help="检查端口是否可用"/>
+
+                    <!-- 测试连接按钮 -->
+                    <button name="action_test_connection" string="测试连接" type="object"
+                            class="btn-secondary" icon="fa-plug"
+                            help="测试与MCP服务器的连接"/>
+
                     <field name="state" widget="statusbar" statusbar_visible="draft,active,inactive"/>
                 </header>
                 <sheet>
                     <div class="oe_button_box" name="button_box">
                         <button name="%(mcp_server.action_mcp_resource_list)d" type="action"
                                 class="oe_stat_button" icon="fa-cubes"
-                                context="{'search_default_server_id': active_id}">
+                                context="{'search_default_server_id': id}">
                             <field name="resource_count" widget="statinfo" string="资源"/>
                         </button>
                     </div>
@@ -129,8 +158,11 @@
                     </div>
                     <group>
                         <group>
-                            <field name="server_url" placeholder="例如: https://mcp-server.example.com"/>
-                            <field name="api_key" password="True"/>
+                            <field name="server_port" required="1"
+                                   options="{'bg_color': 'bg-primary', 'text_color': 'text-white'}"
+                                   help="每个服务器必须使用唯一的端口，范围10888-65000"/>
+                            <field name="server_url" readonly="1"/>
+                            <field name="api_key" readonly="1"/>
                         </group>
                         <group>
                             <field name="last_connection" readonly="1"/>
@@ -151,6 +183,27 @@
                                 </tree>
                             </field>
                         </page>
+                        <page string="安全设置" name="security">
+                            <group>
+                                <group string="授权设置">
+                                    <field name="require_auth"/>
+                                    <field name="api_key" password="True" readonly="0"/>
+                                    <button name="action_generate_new_api_key" string="生成新密钥"
+                                            type="object" class="btn-secondary"
+                                            icon="fa-key" help="生成新的API密钥"/>
+                                </group>
+                                <group string="访问控制">
+                                    <field name="allowed_ips" placeholder="例如: 192.168.1.0/24&#10;10.0.0.1"/>
+                                    <field name="max_requests_per_minute"/>
+                                    <field name="log_requests"/>
+                                </group>
+                            </group>
+                            <div class="alert alert-info" role="alert">
+                                <strong>安全提示：</strong>
+                                启用授权验证和IP限制可以有效防止未授权访问。
+                                API密钥应当保密，定期更换可以提高安全性。
+                            </div>
+                        </page>
                     </notebook>
                 </sheet>
                 <div class="oe_chatter">
@@ -170,10 +223,28 @@
                   decoration-info="state=='draft'" decoration-success="state=='active'">
                 <field name="active" invisible="1"/>
                 <field name="name"/>
+                <field name="server_port"/>
                 <field name="server_url"/>
                 <field name="state"/>
                 <field name="last_connection"/>
                 <field name="resource_count"/>
+
+                <!-- 快速操作按钮 -->
+                <button name="action_activate" string="启动" type="object"
+                        icon="fa-play" class="btn-success"
+                        invisible="state == 'active'"
+                        help="启动服务器"/>
+                <button name="action_deactivate" string="停止" type="object"
+                        icon="fa-stop" class="btn-danger"
+                        invisible="state != 'active'"
+                        help="停止服务器"/>
+                <button name="action_restart" string="重启" type="object"
+                        icon="fa-refresh" class="btn-warning"
+                        invisible="state != 'active'"
+                        help="重启服务器"/>
+                <button name="action_get_server_status" string="状态" type="object"
+                        icon="fa-info-circle" class="btn-info"
+                        help="检查状态"/>
             </tree>
         </field>
     </record>
@@ -206,14 +277,171 @@
                 创建第一个MCP服务器
             </p>
             <p>
-                MCP服务器用于管理和连接到外部资源。
+                MCP服务器用于管理和连接到外部资源。每个服务器运行在独立的端口上。
+            </p>
+        </field>
+    </record>
+
+    <!-- 批量启动服务器动作 -->
+    <record id="action_batch_start_servers" model="ir.actions.server">
+        <field name="name">批量启动服务器</field>
+        <field name="model_id" ref="model_mcp_server"/>
+        <field name="binding_model_id" ref="model_mcp_server"/>
+        <field name="binding_view_types">list</field>
+        <field name="state">code</field>
+        <field name="code">
+            action = records.action_batch_start()
+        </field>
+    </record>
+
+    <!-- 批量停止服务器动作 -->
+    <record id="action_batch_stop_servers" model="ir.actions.server">
+        <field name="name">批量停止服务器</field>
+        <field name="model_id" ref="model_mcp_server"/>
+        <field name="binding_model_id" ref="model_mcp_server"/>
+        <field name="binding_view_types">list</field>
+        <field name="state">code</field>
+        <field name="code">
+            action = records.action_batch_stop()
+        </field>
+    </record>
+
+    <!-- 服务器控制面板视图 -->
+    <record id="view_mcp_server_kanban" model="ir.ui.view">
+        <field name="name">mcp.server.kanban</field>
+        <field name="model">mcp.server</field>
+        <field name="arch" type="xml">
+            <kanban class="o_kanban_mobile">
+                <field name="name"/>
+                <field name="server_port"/>
+                <field name="server_url"/>
+                <field name="state"/>
+                <field name="last_connection"/>
+                <field name="resource_count"/>
+                <templates>
+                    <t t-name="kanban-box">
+                        <div class="oe_kanban_card oe_kanban_global_click">
+                            <div class="o_kanban_card_header">
+                                <div class="o_kanban_card_header_title">
+                                    <div class="o_primary">
+                                        <strong>
+                                            <field name="name"/>
+                                        </strong>
+                                    </div>
+                                    <div class="o_secondary">
+                                        端口:
+                                        <field name="server_port"/>
+                                    </div>
+                                </div>
+                                <div class="o_kanban_manage_button_section">
+                                    <a class="o_kanban_manage_toggle_button" href="#">
+                                        <i class="fa fa-ellipsis-v" role="img" aria-label="管理" title="管理"/>
+                                    </a>
+                                </div>
+                            </div>
+                            <div class="o_kanban_card_content">
+                                <div class="o_kanban_card_manage_pane dropdown-menu" role="menu">
+                                    <a t-if="record.state.raw_value != 'active'"
+                                       type="object" name="action_activate" class="dropdown-item">
+                                        <i class="fa fa-play text-success"/>
+                                        启动服务器
+                                    </a>
+                                    <a t-if="record.state.raw_value == 'active'"
+                                       type="object" name="action_deactivate" class="dropdown-item">
+                                        <i class="fa fa-stop text-danger"/>
+                                        停止服务器
+                                    </a>
+                                    <a t-if="record.state.raw_value == 'active'"
+                                       type="object" name="action_restart" class="dropdown-item">
+                                        <i class="fa fa-refresh text-warning"/>
+                                        重启服务器
+                                    </a>
+                                    <div class="dropdown-divider"/>
+                                    <a type="object" name="action_get_server_status" class="dropdown-item">
+                                        <i class="fa fa-info-circle text-info"/>
+                                        检查状态
+                                    </a>
+                                    <a type="object" name="action_test_connection" class="dropdown-item">
+                                        <i class="fa fa-plug text-primary"/>
+                                        测试连接
+                                    </a>
+                                </div>
+                                <div class="row">
+                                    <div class="col-6">
+                                        <button t-if="record.state.raw_value != 'active'"
+                                                type="object" name="action_activate"
+                                                class="btn btn-primary btn-sm">
+                                            <i class="fa fa-play"/>
+                                            启动
+                                        </button>
+                                        <button t-if="record.state.raw_value == 'active'"
+                                                type="object" name="action_deactivate"
+                                                class="btn btn-danger btn-sm">
+                                            <i class="fa fa-stop"/>
+                                            停止
+                                        </button>
+                                    </div>
+                                    <div class="col-6">
+                                        <span t-if="record.state.raw_value == 'active'"
+                                              class="badge badge-success">运行中
+                                        </span>
+                                        <span t-if="record.state.raw_value == 'inactive'"
+                                              class="badge badge-danger">已停止
+                                        </span>
+                                        <span t-if="record.state.raw_value == 'draft'"
+                                              class="badge badge-info">草稿
+                                        </span>
+                                    </div>
+                                </div>
+                                <div class="mt-2">
+                                    <small class="text-muted">
+                                        URL:
+                                        <field name="server_url"/>
+                                    </small>
+                                </div>
+                                <div>
+                                    <small class="text-muted">
+                                        资源:
+                                        <field name="resource_count"/>
+                                        个
+                                    </small>
+                                </div>
+                                <div t-if="record.last_connection.raw_value">
+                                    <small class="text-muted">
+                                        最后连接:
+                                        <field name="last_connection"/>
+                                    </small>
+                                </div>
+                            </div>
+                        </div>
+                    </t>
+                </templates>
+            </kanban>
+        </field>
+    </record>
+
+    <!-- 更新action以包含kanban视图 -->
+    <record id="action_mcp_server_dashboard" model="ir.actions.act_window">
+        <field name="name">MCP服务器控制面板</field>
+        <field name="res_model">mcp.server</field>
+        <field name="view_mode">kanban,tree,form</field>
+        <field name="search_view_id" ref="view_mcp_server_search"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                创建第一个MCP服务器
+            </p>
+            <p>
+                使用控制面板可以直观地管理所有MCP服务器的启动和停止。
             </p>
         </field>
     </record>
 
     <!-- 菜单项 -->
     <menuitem id="menu_mcp_root" name="MCP服务器" web_icon="mcp_server,static/description/icon.png" sequence="100"/>
-    <menuitem id="menu_mcp_server" name="服务器" parent="menu_mcp_root" action="action_mcp_server_list" sequence="10"/>
-    <menuitem id="menu_mcp_resource" name="资源" parent="menu_mcp_root" action="action_mcp_resource_list"
+    <menuitem id="menu_mcp_dashboard" name="控制面板" parent="menu_mcp_root" action="action_mcp_server_dashboard"
+              sequence="5"/>
+    <menuitem id="menu_mcp_server" name="服务器管理" parent="menu_mcp_root" action="action_mcp_server_list"
+              sequence="10"/>
+    <menuitem id="menu_mcp_resource" name="资源管理" parent="menu_mcp_root" action="action_mcp_resource_list"
               sequence="20"/>
 </odoo>

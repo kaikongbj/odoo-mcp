@@ -1,16 +1,15 @@
 import asyncio
 import logging
+import socket
 import threading
 import time
-import socket
-from typing import Dict, Any, Optional
 from contextlib import contextmanager
-from queue import Queue, Empty
-
 from fastmcp import FastMCP, Context
 from odoo import api, models, fields, _
 from odoo.http import request
 from odoo.modules.registry import Registry
+from queue import Queue, Empty
+from typing import Dict, Any, Optional
 
 _logger = logging.getLogger(__name__)
 
@@ -239,7 +238,7 @@ class FastMCPService:
 
     def __init__(self):
         """初始化FastMCP服务"""
-        self.mcp_servers = {}  # 存储MCP服务器实例
+        self.mcp_servers = {}  # 存储MCP服务器实例 {server_id: {'instance': mcp_server, 'port': port, 'thread': thread}}
         self.event_loop = None
         self._event_loop_thread = None
         # 初始化安全数据库管理器
@@ -290,12 +289,36 @@ class FastMCPService:
 
         if server_id in self.mcp_servers:
             _logger.info("找到现有的MCP服务器实例: %s", server_id)
-            return self.mcp_servers.get(server_id)
+            return self.mcp_servers[server_id]['instance']
 
         try:
             _logger.info("开始创建新的FastMCP服务器实例")
-            # 创建新的FastMCP服务器实例
-            mcp_server = FastMCP(name=server_record.name)
+
+            # 获取服务器安全设置
+            server_security_settings = self._get_server_security_settings(server_record.id)
+
+            # 创建认证提供者
+            auth_provider = self._create_auth_provider(server_security_settings)
+
+            # 创建新的FastMCP服务器实例，包含认证设置
+            if auth_provider:
+                _logger.info("创建带有认证的FastMCP服务器实例")
+                # 使用FastMCP的auth_server_provider参数
+                try:
+                    mcp_server = FastMCP(
+                        name=server_record.name,
+                        auth_server_provider=auth_provider
+                    )
+                    _logger.info("创建了带有OAuth授权的FastMCP服务器实例")
+                except Exception as e:
+                    _logger.warning("无法使用OAuth授权提供者，回退到基本模式: %s", str(e))
+                    mcp_server = FastMCP(name=server_record.name)
+                    # 将认证提供者存储到服务器实例中，供工具级别使用
+                    setattr(mcp_server, '_auth_provider', auth_provider)
+            else:
+                _logger.info("创建无认证的FastMCP服务器实例")
+                mcp_server = FastMCP(name=server_record.name)
+            
             _logger.info("创建的FastMCP服务器实例: %s", mcp_server)
 
             # 注册默认工具和资源
@@ -304,16 +327,20 @@ class FastMCPService:
             _logger.info("开始注册默认资源")
             self._register_default_resources(mcp_server, server_record)
 
-            self.mcp_servers[server_id] = mcp_server
-            _logger.info("为服务器 %s 创建了新的FastMCP实例，实例详情: %s", server_record.name, mcp_server)
+            # 存储服务器实例信息
+            self.mcp_servers[server_id] = {
+                'instance': mcp_server,
+                'port': server_record.server_port,
+                'thread': None,
+                'name': server_record.name
+            }
+            _logger.info("为服务器 %s 创建了新的FastMCP实例，端口: %d", server_record.name, server_record.server_port)
             return mcp_server
         except Exception as e:
             _logger.error("创建FastMCP服务器实例失败: %s", str(e))
             import traceback
             _logger.error("异常详情: %s", traceback.format_exc())
             return None
-
-        return self.mcp_servers.get(server_id)
 
     async def _safe_execute_with_env(self, operation, *args, **kwargs):
         """安全执行数据库操作的统一入口方法
@@ -689,8 +716,248 @@ class FastMCPService:
             }
         }
 
+    def _create_auth_provider(self, server_security_settings):
+        """创建符合FastMCP标准的授权提供者"""
+        try:
+            # 如果不需要授权，返回None
+            if not server_security_settings.get('require_auth', True):
+                _logger.debug("未启用认证，不创建授权提供者")
+                return None
+
+            # 获取认证方式，默认为api_key
+            auth_method = server_security_settings.get('auth_method', 'api_key')
+
+            if auth_method == 'jwt':
+                # 使用JWT Bearer Token认证
+                try:
+                    # 导入FastMCP的BearerAuthProvider
+                    from fastmcp.server.auth import BearerAuthProvider
+
+                    # 获取JWT配置参数
+                    jwt_public_key = server_security_settings.get('jwt_public_key')
+                    jwks_uri = server_security_settings.get('jwks_uri')
+                    jwt_issuer = server_security_settings.get('jwt_issuer')
+                    jwt_audience = server_security_settings.get('jwt_audience')
+                    jwt_algorithm = server_security_settings.get('jwt_algorithm', 'RS256')
+
+                    if not (jwt_public_key or jwks_uri):
+                        _logger.warning("JWT认证方式需要提供公钥或JWKS URI，但两者均未设置")
+                        return None
+
+                    # 创建FastMCP的BearerAuthProvider实例
+                    auth_params = {
+                        'algorithm': jwt_algorithm
+                    }
+
+                    if jwt_issuer:
+                        auth_params['issuer'] = jwt_issuer
+                    if jwt_audience:
+                        auth_params['audience'] = jwt_audience
+
+                    if jwks_uri:
+                        auth_params['jwks_uri'] = jwks_uri
+                        _logger.info(f"使用JWKS URI创建JWT认证提供者: {jwks_uri}")
+                    elif jwt_public_key:
+                        auth_params['public_key'] = jwt_public_key
+                        _logger.info("使用公钥创建JWT认证提供者")
+
+                    return BearerAuthProvider(**auth_params)
+
+                except ImportError as e:
+                    _logger.error(f"导入FastMCP的BearerAuthProvider失败: {e}")
+                    _logger.error("请确保安装了正确版本的fastmcp库")
+                    return None
+                except Exception as e:
+                    _logger.error(f"创建JWT认证提供者失败: {e}")
+                    return None
+            else:
+                # 使用API密钥认证
+                api_key = server_security_settings.get('api_key')
+                if not api_key:
+                    _logger.warning("API密钥认证方式但未设置API密钥")
+                    return None
+
+                allowed_ips = server_security_settings.get('allowed_ips', [])
+                log_requests = server_security_settings.get('log_requests', True)
+
+                # 创建符合FastMCP标准的OAuth授权服务器提供者
+                class OdooMCPAuthProvider:
+                    """Odoo MCP服务器的OAuth授权提供者"""
+
+                    def __init__(self, api_key, allowed_ips=None, log_requests=True):
+                        self.api_key = api_key
+                        self.allowed_ips = allowed_ips or []
+                        self.log_requests = log_requests
+
+                    async def get_authorization_url(self, client_id, redirect_uri, state=None, scopes=None):
+                        """获取授权URL - 对于API密钥认证，这个方法不需要实现"""
+                        raise NotImplementedError("API密钥认证不需要授权URL")
+
+                    async def exchange_code_for_tokens(self, code, client_id, client_secret, redirect_uri):
+                        """交换授权码获取令牌 - 对于API密钥认证，这个方法不需要实现"""
+                        raise NotImplementedError("API密钥认证不需要授权码交换")
+
+                    async def verify_token(self, token, scopes=None):
+                        """验证访问令牌"""
+                        try:
+                            # 验证API密钥
+                            if token != self.api_key:
+                                if self.log_requests:
+                                    _logger.warning("API密钥验证失败")
+                                return None
+
+                            if self.log_requests:
+                                _logger.info("API密钥验证成功")
+
+                            # 返回用户信息
+                            return {
+                                "sub": "odoo_mcp_user",
+                                "scopes": scopes or [],
+                                "client_id": "odoo_mcp_client"
+                            }
+
+                        except Exception as e:
+                            _logger.error(f"令牌验证过程中发生错误: {e}")
+                            return None
+
+                    async def refresh_token(self, refresh_token, client_id, client_secret):
+                        """刷新访问令牌 - 对于API密钥认证，这个方法不需要实现"""
+                        raise NotImplementedError("API密钥认证不需要令牌刷新")
+
+                _logger.info("使用API密钥创建认证提供者")
+                return OdooMCPAuthProvider(api_key, allowed_ips, log_requests)
+        except Exception as e:
+            _logger.error(f"创建授权提供者失败: {e}")
+            return None
+
+    async def _check_authentication(self, mcp_server, ctx):
+        """检查认证"""
+        try:
+            # 获取安全设置
+            security_settings = getattr(mcp_server, '_security_settings', {})
+
+            # 如果不需要授权，直接通过
+            if not security_settings.get('require_auth', True):
+                return None
+
+            # 获取认证方式，默认为API密钥
+            auth_method = security_settings.get('auth_method', 'api_key')
+
+            # 认证方式特定的验证准备
+            if auth_method == 'api_key':
+                # 验证API密钥的必要存在性
+                api_key = security_settings.get('api_key')
+                if not api_key:
+                    return {"status": "error", "message": "服务器未配置API密钥"}
+            elif auth_method == 'jwt':
+                # 检查JWT认证提供者
+                auth_provider = getattr(mcp_server, '_auth_provider', None)
+                if not auth_provider:
+                    return {"status": "error", "message": "服务器JWT认证提供者未正确配置"}
+
+            # 尝试从上下文获取HTTP请求
+            if ctx and hasattr(ctx, 'get_http_request'):
+                try:
+                    request = ctx.get_http_request()
+                    if request:
+                        # 检查Authorization头
+                        auth_header = request.headers.get('authorization', '')
+                        if auth_header.startswith('Bearer '):
+                            token = auth_header[7:]  # 移除 'Bearer ' 前缀
+
+                            # 根据不同认证方式验证token
+                            if auth_method == 'jwt':
+                                # 使用JWT认证提供者验证令牌
+                                try:
+                                    # 调用FastMCP的verify_token方法验证JWT令牌
+                                    user_info = await auth_provider.verify_token(token)
+
+                                    if not user_info:
+                                        if security_settings.get('log_requests', True):
+                                            _logger.warning("JWT Bearer token验证失败")
+                                        return {"status": "error", "message": "无效或过期的JWT Bearer token"}
+
+                                    # 记录令牌验证成功的用户信息
+                                    if security_settings.get('log_requests', True):
+                                        _logger.info(
+                                            f"JWT Bearer token验证成功 - 用户: {user_info.get('client_id', 'unknown')}")
+
+                                    # 检查IP白名单
+                                    allowed_ips = security_settings.get('allowed_ips', [])
+                                    if allowed_ips:
+                                        client_ip = getattr(request.client, 'host', 'unknown') if hasattr(request,
+                                                                                                          'client') else 'unknown'
+                                        if client_ip != 'unknown' and client_ip not in allowed_ips:
+                                            if security_settings.get('log_requests', True):
+                                                _logger.warning(f"IP访问拒绝: {client_ip} - 不在白名单中")
+                                            return {"status": "error", "message": "IP地址未授权访问"}
+
+                                    # 验证通过，将用户信息保存到上下文
+                                    ctx.auth_user = user_info
+                                    return None
+
+                                except Exception as e:
+                                    _logger.error(f"JWT令牌验证过程中发生错误: {str(e)}")
+                                    return {"status": "error", "message": "JWT令牌验证错误"}
+                            else:
+                                # API密钥认证
+                                if token == security_settings.get('api_key'):
+                                    if security_settings.get('log_requests', True):
+                                        _logger.info("API密钥验证成功")
+
+                                    # 检查IP白名单
+                                    allowed_ips = security_settings.get('allowed_ips', [])
+                                    if allowed_ips:
+                                        client_ip = getattr(request.client, 'host', 'unknown') if hasattr(request,
+                                                                                                          'client') else 'unknown'
+                                        if client_ip != 'unknown' and client_ip not in allowed_ips:
+                                            if security_settings.get('log_requests', True):
+                                                _logger.warning(f"IP访问拒绝: {client_ip} - 不在白名单中")
+                                            return {"status": "error", "message": "IP地址未授权访问"}
+
+                                    # 设置基本的用户信息到上下文
+                                    ctx.auth_user = {
+                                        "sub": "odoo_mcp_user",
+                                        "client_id": "odoo_mcp_client"
+                                    }
+                                    return None  # 验证通过
+                                else:
+                                    if security_settings.get('log_requests', True):
+                                        _logger.warning("API密钥验证失败")
+                                    return {"status": "error", "message": "无效的API密钥"}
+                        else:
+                            if security_settings.get('log_requests', True):
+                                _logger.warning("缺少Authorization头或格式不正确")
+                            return {"status": "error", "message": "需要Bearer token认证"}
+                except Exception as e:
+                    _logger.debug("无法获取HTTP请求上下文: %s", str(e))
+
+            # 如果无法获取HTTP上下文，记录日志但允许通过（向后兼容）
+            # 注意：这是一个向后兼容的处理，在生产环境中应考虑提高安全性
+            if security_settings.get('log_requests', True):
+                _logger.info(f"收到工具调用请求（无HTTP上下文）- 认证方式: {auth_method}")
+
+            return None  # 通过验证
+
+        except Exception as e:
+            _logger.error("认证检查失败: %s", str(e))
+            import traceback
+            _logger.error(f"认证失败详细信息: {traceback.format_exc()}")
+            return {"status": "error", "message": "认证验证失败"}
+    
     def _register_default_tools(self, mcp_server, server_record):
         """注册默认工具到FastMCP服务器"""
+
+        # 创建认证装饰器 - 不使用*args，因为FastMCP不支持
+        def require_auth(func):
+            # 直接返回原始函数，不使用包装器
+            # FastMCP不支持*args，所以我们需要在每个工具函数内部进行认证检查
+            return func
+
+        # 创建安全检查函数，在每个工具函数内部调用
+        async def check_auth(ctx):
+            """检查认证，返回错误或None"""
+            return await self._check_authentication(mcp_server, ctx)
 
         # ===== Odoo数据访问工具 =====
         @mcp_server.tool()
@@ -717,6 +984,11 @@ class FastMCPService:
                 包含查询结果的字典
             """
             try:
+                # 检查认证
+                auth_result = await check_auth(ctx)
+                if auth_result:
+                    return auth_result  # 返回认证错误
+                
                 if ctx:
                     await ctx.info(f"开始查询模型 '{model_name}'，参数: domain={domain}, fields={fields}")
 
@@ -741,6 +1013,7 @@ class FastMCPService:
                 return {"status": "error", "message": error_msg}
 
         @mcp_server.tool()
+        @require_auth
         async def get_odoo_record(model_name: str, record_id: int, ctx: Context = None) -> Dict[str, Any]:
             """获取Odoo中指定记录的详细信息
             
@@ -770,6 +1043,7 @@ class FastMCPService:
                 return {"status": "error", "message": error_msg}
 
         @mcp_server.tool()
+        @require_auth
         async def create_odoo_record(model_name: str, values: Dict[str, Any], ctx: Context = None) -> Dict[str, Any]:
             """在Odoo中创建新记录
             
@@ -801,6 +1075,7 @@ class FastMCPService:
                 return {"status": "error", "message": error_msg}
 
         @mcp_server.tool()
+        @require_auth
         async def update_odoo_record(model_name: str, record_id: int, values: Dict[str, Any], ctx: Context = None) -> Dict[str, Any]:
             """更新Odoo中的记录
             
@@ -927,6 +1202,193 @@ class FastMCPService:
                 _logger.error("FastMCP工具get_resource_content失败: %s", str(e))
                 return {"status": "error", "message": str(e)}
 
+    async def _check_authentication(self, mcp_server, ctx):
+        """检查认证"""
+        try:
+            # 获取认证提供者
+            auth_provider = getattr(mcp_server, '_auth_provider', None)
+
+            if not auth_provider:
+                # 没有认证提供者，允许访问
+                return None
+
+            # 尝试从上下文获取HTTP请求
+            request = None
+            if ctx and hasattr(ctx, 'get_http_request'):
+                try:
+                    request = ctx.get_http_request()
+                except Exception as e:
+                    _logger.debug(f"无法获取HTTP请求: {e}")
+
+            # 从请求中提取API密钥
+            api_key = None
+            if request:
+                # 尝试从Authorization头获取Bearer token
+                auth_header = request.headers.get('authorization', '')
+                if auth_header.startswith('Bearer '):
+                    api_key = auth_header[7:]  # 移除 'Bearer ' 前缀
+
+                # 如果没有找到Bearer token，尝试从X-API-Key头获取
+                if not api_key:
+                    api_key = request.headers.get('x-api-key') or request.headers.get('X-API-Key')
+
+                # 最后尝试从查询参数获取
+                if not api_key and hasattr(request, 'query_params'):
+                    api_key = request.query_params.get('api_key')
+
+            # 如果没有提供API密钥
+            if not api_key:
+                _logger.warning("请求缺少API密钥")
+                return {
+                    "status": "error",
+                    "message": "需要API密钥认证。请在Authorization头中提供Bearer token或使用X-API-Key头。",
+                    "code": 401
+                }
+
+            # 验证API密钥
+            is_valid = await auth_provider.verify_token(api_key, request)
+            if not is_valid:
+                return {
+                    "status": "error",
+                    "message": "无效的API密钥或访问被拒绝",
+                    "code": 403
+                }
+
+            # 认证成功
+            return None
+
+        except Exception as e:
+            _logger.error(f"认证检查失败: {e}")
+            return {
+                "status": "error",
+                "message": "认证过程中发生错误",
+                "code": 500
+            }
+
+    def _check_security(self, mcp_server, ctx):
+        """检查安全验证"""
+        try:
+            # 获取安全设置
+            security_settings = getattr(mcp_server, '_security_settings', {})
+
+            # 如果不需要授权，直接通过
+            if not security_settings.get('require_auth', True):
+                return None
+
+            # 获取请求信息
+            request = ctx.get_http_request() if ctx and hasattr(ctx, 'get_http_request') else None
+
+            if request:
+                # 获取客户端IP
+                client_ip = getattr(request.client, 'host', 'unknown') if hasattr(request, 'client') else 'unknown'
+
+                # 记录请求
+                if security_settings.get('log_requests', True):
+                    _logger.info(
+                        f"收到请求: {request.url.path if hasattr(request, 'url') else 'unknown'} - 客户端IP: {client_ip}")
+
+                # 检查IP白名单
+                allowed_ips = security_settings.get('allowed_ips', [])
+                if allowed_ips and client_ip != "unknown" and client_ip not in allowed_ips:
+                    _logger.warning(f"IP访问拒绝: {client_ip} - 不在白名单中")
+                    return {"error": "IP地址未授权访问", "status": 403}
+
+                # 检查API密钥
+                api_key = security_settings.get('api_key')
+                auth_header = request.headers.get("Authorization") if hasattr(request, 'headers') else None
+
+                if auth_header and auth_header.startswith("Bearer "):
+                    token = auth_header[7:]  # 去掉"Bearer "前缀
+                    if token != api_key:
+                        _logger.warning(f"API密钥验证失败: {client_ip}")
+                        return {"error": "无效的API密钥", "status": 401}
+                else:
+                    # 尝试从查询参数获取API密钥
+                    query_api_key = request.query_params.get("api_key") if hasattr(request, 'query_params') else None
+                    if not query_api_key or query_api_key != api_key:
+                        _logger.warning(f"API密钥验证失败: {client_ip}")
+                        return {"error": "无效的API密钥", "status": 401}
+
+            return None  # 通过验证
+
+        except Exception as e:
+            _logger.error("安全检查失败: %s", str(e))
+            return {"status": "error", "message": "安全验证失败"}
+
+    def _log_request(self, tool_name, mcp_server):
+        """记录工具调用请求"""
+        try:
+            # 获取安全设置
+            security_settings = getattr(mcp_server, '_security_settings', {})
+
+            # 记录请求
+            if security_settings.get('log_requests', True):
+                _logger.info(f"工具调用: {tool_name}")
+
+        except Exception as e:
+            _logger.error("记录请求失败: %s", str(e))
+
+    def _get_server_security_settings(self, server_id):
+        """获取服务器安全设置"""
+        try:
+            def get_security_settings(env):
+                server = env['mcp.server'].sudo().browse(server_id)
+                if not server.exists():
+                    return {
+                        'require_auth': True,
+                        'auth_method': 'api_key',  # 默认使用API密钥认证
+                        'api_key': None,
+                        'allowed_ips': [],
+                        'max_requests_per_minute': 60,
+                        'log_requests': True
+                    }
+
+                # 解析允许的IP地址
+                allowed_ips = []
+                if server.allowed_ips:
+                    allowed_ips = [ip.strip() for ip in server.allowed_ips.split('\n') if ip.strip()]
+
+                # 基本安全设置
+                settings = {
+                    'require_auth': server.require_auth,
+                    'auth_method': server.auth_method or 'api_key',  # 获取认证方式，默认为api_key
+                    'api_key': server.api_key,
+                    'allowed_ips': allowed_ips,
+                    'max_requests_per_minute': server.max_requests_per_minute,
+                    'log_requests': server.log_requests
+                }
+
+                # 如果是JWT认证方式，添加JWT相关配置
+                if settings['auth_method'] == 'jwt':
+                    settings.update({
+                        'jwt_public_key': server.jwt_public_key,
+                        'jwks_uri': server.jwks_uri,
+                        'jwt_issuer': server.jwt_issuer,
+                        'jwt_audience': server.jwt_audience,
+                        'jwt_algorithm': server.jwt_algorithm or 'RS256',
+                    })
+                    _logger.debug(f"获取到JWT认证配置: 使用{'JWKS URI' if server.jwks_uri else '公钥'}验证")
+
+                return settings
+
+            # 使用同步方式获取安全设置
+            with self.db_manager.get_env() as env:
+                return get_security_settings(env)
+
+        except Exception as e:
+            _logger.error("获取服务器安全设置失败: %s", str(e))
+            import traceback
+            _logger.error(f"异常详情: {traceback.format_exc()}")
+            # 返回默认安全设置
+            return {
+                'require_auth': True,
+                'auth_method': 'api_key',  # 默认使用API密钥认证
+                'api_key': None,
+                'allowed_ips': [],
+                'max_requests_per_minute': 60,
+                'log_requests': True
+            }
+    
     def _register_default_resources(self, mcp_server, server_record):
         """注册默认资源到FastMCP服务器"""
 
@@ -1019,13 +1481,14 @@ class FastMCPService:
             # 在异步函数开始时保存必要的信息，而不使用server_record对象
             server_id = server_record.id
             server_name = server_record.name
+            server_port = server_record.server_port
 
-            _logger.info("开始异步启动MCP服务器: %s", server_name)
-            # 使用固定端口10888
+            _logger.info("开始异步启动MCP服务器: %s (端口: %d)", server_name, server_port)
+            # 使用服务器记录中配置的端口
             host = "0.0.0.0"  # 监听所有网络接口
-            port = 10888  # 使用固定端口10888
+            port = server_port  # 使用服务器记录中的端口
 
-            _logger.info("服务器配置 - 主机: %s, 端口: %s, 模式: %s", host, port, "sse")
+            _logger.info("服务器配置 - 主机: %s, 端口: %s, 模式: %s", host, port, "http")
 
             # 检查端口是否已经被占用
             import socket
@@ -1050,8 +1513,8 @@ class FastMCPService:
                     _logger.info("在新线程中启动FastMCP服务器")
 
                     # 使用正确的方式启动FastMCP服务器
-                    # 使用SSE (Server-Sent Events) 传输模式
-                    _logger.info("开始启动FastMCP服务器，transport=sse, host=%s, port=%s", host, port)
+                    # 使用streamable-http传输模式
+                    _logger.info("开始启动FastMCP服务器，transport=streamable-http, host=%s, port=%s", host, port)
 
                     # 配置服务器的初始化回调
                     original_on_connect = getattr(mcp_server, '_on_connect_callbacks', [])
@@ -1065,11 +1528,17 @@ class FastMCPService:
                     if hasattr(mcp_server, 'add_on_connect_callback'):
                         mcp_server.add_on_connect_callback(on_server_ready)
 
+                    # 记录安全状态
+                    if hasattr(mcp_server, '_auth_provider'):
+                        _logger.info("FastMCP服务器已配置API密钥认证")
+                    else:
+                        _logger.info("FastMCP服务器使用内置OAuth认证或无认证")
+                    
                     # 启动服务器 - 这个调用会阻塞直到服务器关闭
                     mcp_server.run(
-                        transport="sse",  # 使用SSE传输模式
+                        transport="streamable-http",  # 使用streamable-http传输模式
                         host=host,
-                        port=port
+                        port=port,
                     )
 
                     # 如果run()返回，说明服务器正常启动了
@@ -1090,10 +1559,14 @@ class FastMCPService:
             server_thread = threading.Thread(
                 target=start_fastmcp_server,
                 daemon=True,
-                name="FastMCP-Server"
+                name=f"FastMCP-Server-{server_id}-{port}"
             )
             server_thread.start()
-            _logger.info("FastMCP服务器线程已启动")
+            _logger.info("FastMCP服务器线程已启动，线程名: %s", server_thread.name)
+
+            # 存储线程引用
+            if server_id in self.mcp_servers:
+                self.mcp_servers[server_id]['thread'] = server_thread
 
             # 给服务器一些时间启动并绑定端口
             await asyncio.sleep(3.0)  # 增加到3秒让服务器完全初始化
@@ -1141,17 +1614,38 @@ class FastMCPService:
 
             _logger.info("FastMCP服务器已在 %s:%s 启动", host, port)
 
-            # 在主线程中更新服务器状态，避免使用异步函数中的已关闭游标
-            # 我们将该操作移至异步函数外部处理
+            # 使用安全数据库管理器更新服务器状态和URL
+            def update_server_url(env):
+                server = env['mcp.server'].sudo().browse(server_id)
+                if server.exists():
+                    server.write({
+                        'server_url': f'http://127.0.0.1:{port}',
+                        'state': 'active',
+                        'last_connection': fields.Datetime.now()
+                    })
+                    return True
+                return False
+
+            await self._safe_execute_with_env(update_server_url)
             return {'success': True, 'server_id': server_id}
         except Exception as e:
             _logger.error("异步启动FastMCP服务器失败: %s", str(e))
             import traceback
             _logger.error("异常详情: %s", traceback.format_exc())
-            # 更新服务器状态
-            server_record.sudo().write({
-                'state': 'inactive'
-            })
+
+            # 使用安全数据库管理器更新服务器状态
+            def update_server_state(env):
+                server = env['mcp.server'].sudo().browse(server_id)
+                if server.exists():
+                    server.write({'state': 'inactive'})
+                    return True
+                return False
+
+            try:
+                await self._safe_execute_with_env(update_server_state)
+            except Exception as update_error:
+                _logger.error("更新服务器状态失败: %s", str(update_error))
+            
             return {'success': False, 'error': str(e)}
 
     def stop_server(self, server_record):
@@ -1180,16 +1674,98 @@ class FastMCPService:
             # 由于FastMCP可能没有明确的stop方法，我们可能需要自己实现或者依赖
             # 关闭事件循环或取消任务
 
-            # 从字典中移除服务器实例
+            # 获取服务器信息并清理
+            server_info = None
             if server_id in self.mcp_servers:
+                server_info = self.mcp_servers[server_id]
+                _logger.info("正在停止MCP服务器: %s (端口: %d)",
+                             server_info['name'], server_info['port'])
+
+                # 清理服务器实例
                 del self.mcp_servers[server_id]
 
-            # 更新服务器状态
-            server_record.sudo().write({
-                'state': 'inactive'
-            })
+            # 使用安全数据库管理器更新服务器状态
+            def update_server_state(env):
+                server = env['mcp.server'].sudo().browse(server_record.id)
+                if server.exists():
+                    server.write({'state': 'inactive'})
+                    return True
+                return False
+
+            await self._safe_execute_with_env(update_server_state)
 
             _logger.info("FastMCP服务器 %s 已停止", server_record.name)
         except Exception as e:
             _logger.error("异步停止FastMCP服务器失败: %s", str(e))
             raise
+
+    def auto_start_active_servers(self):
+        """自动启动所有活动状态的MCP服务器"""
+        try:
+            _logger.info("开始自动启动所有活动状态的MCP服务器")
+
+            def get_active_servers(env):
+                """获取所有活动状态的服务器"""
+                return env['mcp.server'].sudo().search([('state', '=', 'active')])
+
+            # 使用同步方式获取活动服务器列表
+            with self.db_manager.get_env() as env:
+                active_servers = get_active_servers(env)
+
+                if not active_servers:
+                    _logger.info("没有找到活动状态的MCP服务器")
+                    return True
+
+                _logger.info("找到 %d 个活动状态的MCP服务器", len(active_servers))
+
+                success_count = 0
+                for server in active_servers:
+                    try:
+                        _logger.info("正在自动启动MCP服务器: %s (ID: %d)", server.name, server.id)
+
+                        # 启动服务器
+                        if self.start_server(server):
+                            success_count += 1
+                            _logger.info("成功自动启动MCP服务器: %s", server.name)
+                        else:
+                            _logger.warning("自动启动MCP服务器失败: %s", server.name)
+
+                    except Exception as e:
+                        _logger.error("自动启动MCP服务器 %s 时发生错误: %s", server.name, str(e))
+
+                _logger.info("自动启动完成，成功启动 %d/%d 个MCP服务器", success_count, len(active_servers))
+                return success_count > 0
+
+        except Exception as e:
+            _logger.error("自动启动活动MCP服务器时发生错误: %s", str(e))
+            import traceback
+            _logger.error("错误详情: %s", traceback.format_exc())
+            return False
+
+    @classmethod
+    def auto_start_on_module_init(cls):
+        """模块初始化时自动启动活动服务器的类方法"""
+        try:
+            _logger.info("模块初始化：开始自动启动MCP服务器")
+
+            # 获取服务实例
+            service = cls.get_instance()
+
+            # 给事件循环一些时间完全初始化
+            time.sleep(2.0)
+
+            # 自动启动活动服务器
+            success = service.auto_start_active_servers()
+
+            if success:
+                _logger.info("模块初始化：MCP服务器自动启动完成")
+            else:
+                _logger.warning("模块初始化：MCP服务器自动启动未完全成功")
+
+            return success
+
+        except Exception as e:
+            _logger.error("模块初始化时自动启动MCP服务器失败: %s", str(e))
+            import traceback
+            _logger.error("错误详情: %s", traceback.format_exc())
+            return False

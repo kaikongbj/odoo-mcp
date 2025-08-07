@@ -1,7 +1,7 @@
 import importlib
 import json
 import logging
-
+from odoo import fields
 from odoo import http
 from odoo.http import request
 
@@ -102,6 +102,11 @@ class MCPServerController(http.Controller):
 
             if server.state != 'active':
                 return json.dumps({'status': 'error', 'message': 'MCP服务器不活动，请先激活服务器'})
+
+            # 校验API密钥
+            api_key = request.httprequest.headers.get('X-API-KEY') or request.params.get('api_key')
+            if not api_key or api_key != server.api_key:
+                return json.dumps({'status': 'error', 'message': 'API密钥无效或未提供'})
 
             # 获取FastMCP服务
             fastmcp_service = self._get_fastmcp_service()

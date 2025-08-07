@@ -21,4 +21,5 @@ MCP服务器模块
     'license': 'LGPL-3',
     'author': 'Odoo',
     'website': 'https://www.odoo.com',
+    'post_init_hook': 'post_init_hook',
 }

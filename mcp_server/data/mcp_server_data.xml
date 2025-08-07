@@ -1,21 +1,54 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
     <data noupdate="1">
+        <!-- 默认MCP服务器 - 自动启动 -->
+        <record id="default_mcp_server" model="mcp.server">
+            <field name="name">默认MCP服务器</field>
+            <field name="server_port">10888</field>
+            <field name="server_url">http://127.0.0.1:10888</field>
+            <field name="api_key">default_mcp_key_auto_generated</field>
+            <field name="state">active</field>
+            <field name="note">这是默认的MCP服务器，会在模块启动时自动启动。提供Odoo数据访问和资源管理功能。</field>
+        </record>
+
         <!-- 演示服务器数据 -->
         <record id="demo_mcp_server_1" model="mcp.server">
             <field name="name">演示服务器 1</field>
-            <field name="server_url">https://demo-mcp1.example.com</field>
+            <field name="server_port">10889</field>
+            <field name="server_url">http://127.0.0.1:10889</field>
             <field name="api_key">demo_key_123456</field>
-            <field name="state">active</field>
+            <field name="state">draft</field>
             <field name="note">这是一个演示MCP服务器，用于测试目的。</field>
         </record>
 
         <record id="demo_mcp_server_2" model="mcp.server">
             <field name="name">演示服务器 2</field>
-            <field name="server_url">https://demo-mcp2.example.com</field>
+            <field name="server_port">10890</field>
+            <field name="server_url">http://127.0.0.1:10890</field>
             <field name="api_key">demo_key_abcdef</field>
             <field name="state">draft</field>
             <field name="note">另一个演示MCP服务器，处于草稿状态。</field>
+        </record>
+
+        <!-- 默认服务器资源 -->
+        <record id="default_resource_odoo_models" model="mcp.resource">
+            <field name="name">Odoo模型访问</field>
+            <field name="resource_uri">/odoo/models</field>
+            <field name="server_id" ref="default_mcp_server"/>
+            <field name="resource_type">api</field>
+            <field name="description">提供对Odoo所有模型的查询、创建、更新和删除访问</field>
+            <field name="content">支持的操作：query_odoo_model, get_odoo_record, create_odoo_record, update_odoo_record,
+                delete_odoo_record, get_odoo_model_metadata
+            </field>
+        </record>
+
+        <record id="default_resource_server_info" model="mcp.resource">
+            <field name="name">服务器信息</field>
+            <field name="resource_uri">/server/info</field>
+            <field name="server_id" ref="default_mcp_server"/>
+            <field name="resource_type">service</field>
+            <field name="description">提供MCP服务器状态和配置信息</field>
+            <field name="content">包含服务器状态、连接信息、可用工具和资源列表</field>
         </record>
 
         <!-- 演示资源数据 -->

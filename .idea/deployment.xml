@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
-  <component name="PublishConfigData" autoUpload="Always" serverName="odoo14@39.106.53.251:22 key" persistUploadOnCheckin="false" remoteFilesAllowedToDisappearOnAutoupload="false" confirmBeforeUploading="false" autoUploadExternalChanges="true">
+  <component name="PublishConfigData" autoUpload="Always" serverName="odoo@192.168.1.100:22 password" persistUploadOnCheckin="false" remoteFilesAllowedToDisappearOnAutoupload="false" confirmBeforeUploading="false" autoUploadExternalChanges="true">
     <option name="confirmBeforeUploading" value="false" />
     <serverData>
       <paths name="odoo14@39.106.53.251:22 key">
@@ -11,10 +11,11 @@
           </mappings>
         </serverdata>
       </paths>
-      <paths name="odoo14@39.106.53.251:22 key (2)">
+      <paths name="odoo@192.168.1.100:22 password">
         <serverdata>
           <mappings>
-            <mapping local="$PROJECT_DIR$" web="/" />
+            <mapping deploy="/opt/odoo/custom/addons/mcp_server" local="$PROJECT_DIR$/mcp_server" web="/" />
+            <mapping local="" />
           </mappings>
         </serverdata>
       </paths>

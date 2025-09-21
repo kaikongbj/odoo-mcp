@@ -27,14 +27,14 @@
         <field name="name">mcp.resource.tree</field>
         <field name="model">mcp.resource</field>
         <field name="arch" type="xml">
-            <tree string="MCP资源" decoration-muted="active==False">
+            <list string="MCP资源" decoration-muted="active==False">
                 <field name="active" invisible="1"/>
                 <field name="name"/>
                 <field name="server_id"/>
                 <field name="resource_uri"/>
                 <field name="resource_type"/>
                 <field name="last_fetch"/>
-            </tree>
+            </list>
         </field>
     </record>
 
@@ -87,7 +87,7 @@
     <record id="action_mcp_resource_list" model="ir.actions.act_window">
         <field name="name">MCP资源</field>
         <field name="res_model">mcp.resource</field>
-        <field name="view_mode">tree,form</field>
+        <field name="view_mode">list,form</field>
         <field name="search_view_id" ref="view_mcp_resource_search"/>
         <field name="help" type="html">
             <p class="o_view_nocontent_smiling_face">
@@ -114,9 +114,9 @@
                 </header>
                 <sheet>
                     <div class="oe_button_box" name="button_box">
-                        <button name="%(mcp_server.action_mcp_resource_list)d" type="action"
-                                class="oe_stat_button" icon="fa-cubes"
-                                context="{'search_default_server_id': active_id}">
+            <button name="%(mcp_server.action_mcp_resource_list)d" type="action"
+                class="oe_stat_button" icon="fa-cubes"
+                context="{'search_default_server_id': id}">
                             <field name="resource_count" widget="statinfo" string="资源"/>
                         </button>
                     </div>
@@ -143,12 +143,12 @@
                         </page>
                         <page string="资源" name="resources">
                             <field name="resource_ids" widget="one2many">
-                                <tree string="资源">
+                                <list string="资源">
                                     <field name="name"/>
                                     <field name="resource_uri"/>
                                     <field name="resource_type"/>
                                     <field name="last_fetch"/>
-                                </tree>
+                                </list>
                             </field>
                         </page>
                     </notebook>
@@ -166,7 +166,7 @@
         <field name="name">mcp.server.tree</field>
         <field name="model">mcp.server</field>
         <field name="arch" type="xml">
-            <tree string="MCP服务器" decoration-muted="active==False" decoration-danger="state=='inactive'"
+            <list string="MCP服务器" decoration-muted="active==False" decoration-danger="state=='inactive'"
                   decoration-info="state=='draft'" decoration-success="state=='active'">
                 <field name="active" invisible="1"/>
                 <field name="name"/>
@@ -174,7 +174,7 @@
                 <field name="state"/>
                 <field name="last_connection"/>
                 <field name="resource_count"/>
-            </tree>
+            </list>
         </field>
     </record>
 
@@ -199,7 +199,7 @@
     <record id="action_mcp_server_list" model="ir.actions.act_window">
         <field name="name">MCP服务器</field>
         <field name="res_model">mcp.server</field>
-        <field name="view_mode">tree,form</field>
+        <field name="view_mode">list,form</field>
         <field name="search_view_id" ref="view_mcp_server_search"/>
         <field name="help" type="html">
             <p class="o_view_nocontent_smiling_face">

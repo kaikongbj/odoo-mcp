@@ -1,14 +1,15 @@
 import asyncio
 import logging
+import os
+import socket
 import threading
 import time
-import socket
-from typing import Dict, Any, Optional
 from contextlib import contextmanager
 from queue import Queue, Empty
+from typing import Dict, Any, Optional
 
 from fastmcp import FastMCP, Context
-from odoo import api, models, fields, _
+from odoo import api, fields
 from odoo.http import request
 from odoo.modules.registry import Registry
 
@@ -927,6 +928,55 @@ class FastMCPService:
                 _logger.error("FastMCP工具get_resource_content失败: %s", str(e))
                 return {"status": "error", "message": str(e)}
 
+        # ===== GraphQL 工具 =====
+        @mcp_server.tool()
+        async def graphql(query: str, variables: Optional[Dict[str, Any]] = None, ctx: Context = None) -> Dict[
+            str, Any]:
+            """执行针对 Odoo 的 GraphQL 查询
+
+            Args:
+                query: GraphQL 查询字符串
+                variables: 变量字典
+
+            Returns:
+                执行结果，包含 data 或 errors
+            """
+            try:
+                # 延迟导入，避免可选依赖在无用时造成模块加载失败
+                from .graphql_schema import build_schema
+
+                schema = build_schema()
+
+                def sync_op(env):
+                    context_value = {'env': env}
+                    return schema.execute(
+                        query,
+                        variable_values=variables or {},
+                        context_value=context_value,
+                    )
+
+                # 使用安全环境执行
+                result = await self._safe_execute_with_env(lambda env: sync_op(env))
+
+                payload: Dict[str, Any] = {}
+                if result.errors:
+                    payload['errors'] = [str(e) for e in result.errors]
+                if result.data is not None:
+                    payload['data'] = result.data
+
+                if ctx:
+                    if result.errors:
+                        await ctx.error(f"GraphQL 执行出现 {len(result.errors)} 个错误")
+                    else:
+                        await ctx.info("GraphQL 查询执行成功")
+
+                return payload
+            except Exception as e:
+                _logger.error("GraphQL 执行失败: %s", str(e))
+                if ctx:
+                    await ctx.error(f"GraphQL 执行失败: {str(e)}")
+                return {"errors": [str(e)]}
+
     def _register_default_resources(self, mcp_server, server_record):
         """注册默认资源到FastMCP服务器"""
 
@@ -970,6 +1020,28 @@ class FastMCPService:
             _logger.error("无法获取MCP服务器实例，启动失败")
             return False
 
+        # 若已在监听且当前进程已注册该实例，则不重复启动
+        try:
+            pre_health = self.health_check(server_record)
+            data = pre_health.get('data', {}) if isinstance(pre_health, dict) else {}
+            listening = bool(data.get('listening', False))
+            registered = bool(data.get('registered', False))
+            if pre_health.get('status') == 'success' and listening and registered:
+                _logger.info("检测到服务器已在运行且已注册，跳过重复启动: %s:%s", data.get('host'), data.get('port'))
+                server_record.sudo().write({
+                    'state': 'active',
+                    'last_connection': fields.Datetime.now()
+                })
+                return True
+            elif listening and not registered:
+                _logger.warning(
+                    "检测到端口 %s 正在监听，但当前进程未注册服务器 '%s'，可能由其他进程占用，跳过启动以避免冲突",
+                    data.get('port'), server_record.name)
+                # 不改变状态，交由管理员处理端口冲突
+                return False
+        except Exception as _e:
+            _logger.debug("启动前健康检查异常，忽略继续启动: %s", _e)
+
         try:
             _logger.info("准备异步启动MCP服务器，循环状态: %s", self.event_loop.is_running())
             # 注意：这里需要在实际部署时根据需要修改host和port
@@ -982,28 +1054,34 @@ class FastMCPService:
 
             # 尝试获取后台任务的初始状态，设置较长超时确保得到结果
             try:
-                result = future.result(timeout=3.0)  # 增加超时时间到3秒
+                result = future.result(timeout=5.0)  # 增加超时时间到5秒
                 _logger.info("服务器启动任务结果: %s", result)
 
                 # 如果异步启动成功，在主线程中更新服务器状态
                 if result.get('success', False):
-                    _logger.info("在主线程中更新服务器状态")
+                    # 二次健康检查确认端口是否监听
+                    health = self.health_check(server_record)
+                    ready = health.get('status') == 'success' and health.get('data', {}).get('listening', False)
                     server_record.sudo().write({
-                        'state': 'active',
+                        'state': 'active' if ready else 'inactive',
                         'last_connection': fields.Datetime.now()
                     })
-                    return True
+                    if not ready:
+                        _logger.warning("FastMCP启动后健康检查未通过: %s", health)
+                    return ready
                 else:
                     _logger.error("异步启动失败: %s", result.get('error', '未知错误'))
                     return False
             except asyncio.TimeoutError:
                 _logger.info("服务器启动任务已提交，在后台运行但超时未等到结果")
-                # 假设启动成功，更新状态
+                # 尝试健康检查判断是否已就绪
+                health = self.health_check(server_record)
+                ready = health.get('status') == 'success' and health.get('data', {}).get('listening', False)
                 server_record.sudo().write({
-                    'state': 'active',
+                    'state': 'active' if ready else 'inactive',
                     'last_connection': fields.Datetime.now()
                 })
-                return True
+                return ready
             except Exception as inner_e:
                 _logger.warning("获取服务器启动状态时出现警告: %s", str(inner_e))
                 return False
@@ -1021,11 +1099,12 @@ class FastMCPService:
             server_name = server_record.name
 
             _logger.info("开始异步启动MCP服务器: %s", server_name)
-            # 使用固定端口10888
+            # 使用模型配置的端口
             host = "0.0.0.0"  # 监听所有网络接口
-            port = 10888  # 使用固定端口10888
+            port = int(server_record.port or 10888)
 
-            _logger.info("服务器配置 - 主机: %s, 端口: %s, 模式: %s", host, port, "sse")
+            _logger.info("服务器配置 - 主机: %s, 端口: %s, 首选传输: %s (将自动回退不支持的传输)", host, port,
+                         "streamable-http")
 
             # 检查端口是否已经被占用
             import socket
@@ -1050,8 +1129,8 @@ class FastMCPService:
                     _logger.info("在新线程中启动FastMCP服务器")
 
                     # 使用正确的方式启动FastMCP服务器
-                    # 使用SSE (Server-Sent Events) 传输模式
-                    _logger.info("开始启动FastMCP服务器，transport=sse, host=%s, port=%s", host, port)
+                    # 改用 streamable-http 传输模式
+                    _logger.info("开始启动FastMCP服务器，transport=streamable-http, host=%s, port=%s", host, port)
 
                     # 配置服务器的初始化回调
                     original_on_connect = getattr(mcp_server, '_on_connect_callbacks', [])
@@ -1066,11 +1145,44 @@ class FastMCPService:
                         mcp_server.add_on_connect_callback(on_server_ready)
 
                     # 启动服务器 - 这个调用会阻塞直到服务器关闭
-                    mcp_server.run(
-                        transport="sse",  # 使用SSE传输模式
-                        host=host,
-                        port=port
-                    )
+                    try:
+                        # 优先尝试支持 host/port 的签名
+                        mcp_server.run(
+                            transport="streamable-http",
+                            host=host,
+                            port=port
+                        )
+                    except TypeError:
+                        # 某些版本的 FastMCP.run 不接受 host/port 关键字参数
+                        # 回退方案：通过环境变量传递绑定信息
+                        os.environ['FASTMCP_HOST'] = str(host)
+                        os.environ['FASTMCP_PORT'] = str(port)
+                        # 也兼容常见的 BIND 变量
+                        os.environ['FASTMCP_BIND'] = f"{host}:{port}"
+                        _logger.info("FastMCP.run 不支持 host/port 参数，已改用环境变量传递绑定: %s:%s", host, port)
+                        mcp_server.run(
+                            transport="streamable-http"
+                        )
+                    except ValueError as ve:
+                        # 老版本 fastmcp 可能不支持 streamable-http 传输，降级为 sse
+                        if "Unknown transport" in str(ve):
+                            _logger.warning("streamable-http 不受当前 FastMCP 版本支持，降级使用 sse 传输模式")
+                            try:
+                                mcp_server.run(
+                                    transport="sse",
+                                    host=host,
+                                    port=port
+                                )
+                            except TypeError:
+                                os.environ['FASTMCP_HOST'] = str(host)
+                                os.environ['FASTMCP_PORT'] = str(port)
+                                os.environ['FASTMCP_BIND'] = f"{host}:{port}"
+                                _logger.info("降级 sse 同样不支持 host/port 参数，改用环境变量绑定: %s:%s", host, port)
+                                mcp_server.run(
+                                    transport="sse"
+                                )
+                        else:
+                            raise
 
                     # 如果run()返回，说明服务器正常启动了
                     _logger.info("FastMCP服务器已启动完成")
@@ -1193,3 +1305,54 @@ class FastMCPService:
         except Exception as e:
             _logger.error("异步停止FastMCP服务器失败: %s", str(e))
             raise
+
+    # ----------------------
+    # 健康检查
+    # ----------------------
+    def health_check(self, server_record) -> Dict[str, Any]:
+        """检查指定服务器的健康状态。
+
+        返回示例：
+        {
+            'status': 'success',
+            'data': {
+                'server_id': 1,
+                'name': 'Demo',
+                'host': '127.0.0.1',
+                'port': 10888,
+                'listening': true,
+                'registered': true
+            }
+        }
+        """
+        try:
+            host = '127.0.0.1'
+            port = int(server_record.port or 10888)
+
+            listening = False
+            sock = None
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(0.5)
+                listening = (sock.connect_ex((host, port)) == 0)
+            finally:
+                try:
+                    if sock:
+                        sock.close()
+                except Exception:
+                    pass
+
+            return {
+                'status': 'success',
+                'data': {
+                    'server_id': server_record.id,
+                    'name': server_record.name,
+                    'host': host,
+                    'port': port,
+                    'listening': listening,
+                    'registered': server_record.id in self.mcp_servers,
+                }
+            }
+        except Exception as e:
+            _logger.error("健康检查失败: %s", str(e))
+            return {'status': 'error', 'message': str(e)}

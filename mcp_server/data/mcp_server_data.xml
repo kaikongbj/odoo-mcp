@@ -5,6 +5,7 @@
         <record id="demo_mcp_server_1" model="mcp.server">
             <field name="name">演示服务器 1</field>
             <field name="server_url">https://demo-mcp1.example.com</field>
+            <field name="port">10888</field>
             <field name="api_key">demo_key_123456</field>
             <field name="state">active</field>
             <field name="note">这是一个演示MCP服务器，用于测试目的。</field>
@@ -13,6 +14,7 @@
         <record id="demo_mcp_server_2" model="mcp.server">
             <field name="name">演示服务器 2</field>
             <field name="server_url">https://demo-mcp2.example.com</field>
+            <field name="port">10889</field>
             <field name="api_key">demo_key_abcdef</field>
             <field name="state">draft</field>
             <field name="note">另一个演示MCP服务器，处于草稿状态。</field>

@@ -74,11 +74,7 @@
                         </page>
                     </notebook>
                 </sheet>
-                <div class="oe_chatter">
-                    <field name="message_follower_ids" widget="mail_followers"/>
-                    <field name="activity_ids" widget="mail_activity"/>
-                    <field name="message_ids" widget="mail_thread"/>
-                </div>
+                <chatter/>
             </form>
         </field>
     </record>
@@ -106,9 +102,9 @@
         <field name="arch" type="xml">
             <form string="MCP服务器">
                 <header>
-                    <button name="action_activate" string="激活" type="object" class="oe_highlight"
+                    <button name="action_activate" string="启动服务器" type="object" class="oe_highlight"
                             invisible="state == 'active'"/>
-                    <button name="action_deactivate" string="停用" type="object" invisible="state == 'inactive'"/>
+                    <button name="action_deactivate" string="停止服务器" type="object" invisible="state != 'active'"/>
                     <button name="action_test_connection" string="测试连接" type="object" class="btn-secondary"/>
                     <field name="state" widget="statusbar" statusbar_visible="draft,active,inactive"/>
                 </header>
@@ -130,7 +126,9 @@
                     <group>
                         <group>
                             <field name="server_url" placeholder="例如: https://mcp-server.example.com"/>
+                            <field name="port"/>
                             <field name="api_key" password="True"/>
+                            <field name="auto_start"/>
                         </group>
                         <group>
                             <field name="last_connection" readonly="1"/>
@@ -153,11 +151,7 @@
                         </page>
                     </notebook>
                 </sheet>
-                <div class="oe_chatter">
-                    <field name="message_follower_ids" widget="mail_followers"/>
-                    <field name="activity_ids" widget="mail_activity"/>
-                    <field name="message_ids" widget="mail_thread"/>
-                </div>
+                <chatter/>
             </form>
         </field>
     </record>
@@ -171,6 +165,8 @@
                 <field name="active" invisible="1"/>
                 <field name="name"/>
                 <field name="server_url"/>
+                <field name="port"/>
+                <field name="auto_start"/>
                 <field name="state"/>
                 <field name="last_connection"/>
                 <field name="resource_count"/>

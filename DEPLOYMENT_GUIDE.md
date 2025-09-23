@@ -4,11 +4,11 @@
 
 ### 1. 环境准备
 
-确保你的 Odoo 17 环境已安装并运行：
+确保你的 Odoo 环境已安装并运行：
 
 ```bash
-# 确保 FastMCP 依赖已安装
-pip install fastmcp
+# 安装本模块依赖（包含支持 streamable-http 的 fastmcp 版本）
+pip install -r requirements.txt
 ```
 
 ### 2. 模块安装
@@ -51,7 +51,7 @@ pip install fastmcp
 
 #### 1. 端口被占用错误
 
-```
+```text
 错误: 端口 10888 已被占用
 解决: 
 - 检查是否有其他 MCP 服务器在运行
@@ -61,7 +61,7 @@ pip install fastmcp
 
 #### 2. 数据库连接错误
 
-```
+```text
 错误: 无法获取Odoo环境
 解决:
 - 确保在 HTTP 请求上下文中执行操作
@@ -71,7 +71,7 @@ pip install fastmcp
 
 #### 3. 工具注册失败
 
-```
+```text
 错误: 工具函数未响应
 解决:
 - 检查服务器日志中的错误信息
@@ -126,9 +126,9 @@ pip install fastmcp
 
 ### 服务器设置
 
-- **端口**: 默认 10888，可在代码中修改
+- **端口**: 默认 10888（可在记录中配置）
 - **主机**: 默认监听所有接口 (0.0.0.0)
-- **传输模式**: SSE (Server-Sent Events)
+- **传输模式**: streamable-http
 
 ### 性能调优
 

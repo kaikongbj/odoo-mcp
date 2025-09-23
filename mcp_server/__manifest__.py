@@ -1,6 +1,6 @@
 {
     'name': 'MCP Server',
-    'version': '1.0',
+    'version': '1.1.0',
     'category': 'Services/MCP',
     'summary': 'MCP服务器模块',
     'description': """
@@ -19,6 +19,6 @@ MCP服务器模块
     'application': True,
     'auto_install': False,
     'license': 'LGPL-3',
-    'author': 'Odoo',
-    'website': 'https://www.odoo.com',
+    'author': 'Kaikong Beijing',
+    'website': 'https://www.kaikong.cn',
 }

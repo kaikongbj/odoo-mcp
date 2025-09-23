@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-MCP服务器模块是一个基于Odoo 17和Python
+MCP服务器模块是一个基于Odoo 18和Python
 3.10开发的模块，用于管理和提供MCP（模型上下文协议）服务。该模块集成了FastMCP框架，可以方便地创建、管理和与大型语言模型(LLM)
 交互的MCP服务器。
 
@@ -31,7 +31,7 @@ MCP服务器模块是一个基于Odoo 17和Python
 
 ## 技术架构
 
-```
+```text
 mcp_server/
 ├── __init__.py
 ├── __manifest__.py
@@ -78,17 +78,19 @@ mcp_server/
 
 ## 安装要求
 
-- Odoo 17
+- Odoo 18
 - Python 3.10+
-- FastMCP 2.0+
+- FastMCP >= 2.9.0
 
 ## 安装步骤
 
 1. 确保满足安装要求
 2. 安装必要的Python依赖:
-   ```
-   pip install -r requirements.txt
-   ```
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
 3. 将`mcp_server`目录复制到Odoo的addons路径
 4. 更新Odoo模块列表并安装MCP服务器模块
 
@@ -159,6 +161,12 @@ MCP服务器模块提供以下API接口：
     - 认证: API密钥
     - 返回: 操作结果JSON
 
+7. **健康检查**
+    - URL: `/api/mcp/server/{id}/health`
+    - 方法: GET
+    - 认证: API密钥
+    - 返回: `status` 与 `data.listening` 指示监听状态
+
 ### FastMCP使用
 
 FastMCP框架允许您注册工具和资源，以供大型语言模型(LLM)使用。
@@ -224,6 +232,12 @@ FastMCP框架允许您注册工具和资源，以供大型语言模型(LLM)使�
 
 ## 版本历史
 
+- 1.1.0 (2025-09-23): 健康检查与自启动改进
+    - 新增健康检查接口 `/api/mcp/server/{id}/health`
+    - 启动流程加入健康检查并据此写回状态
+    - 自启动逻辑会在 state=active 但未监听时自动重启
+    - 版本号提升至 1.1.0
+
 - 1.0.0 (2025-05-23): 初始版本
     - 基本MCP服务器管理功能
     - FastMCP集成
@@ -233,8 +247,8 @@ FastMCP框架允许您注册工具和资源，以供大型语言模型(LLM)使�
 
 如有问题或需要支持，请联系:
 
-- 技术支持: support@example.com
-- 项目维护: dev@example.com
+- 技术支持: <support@example.com>
+- 项目维护: <dev@example.com>
 
 ## 许可证
 

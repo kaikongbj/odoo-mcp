@@ -10,17 +10,47 @@ _logger = logging.getLogger(__name__)
 
 class MCPServerController(http.Controller):
     def _extract_api_key(self):
-        """从请求头提取 API Key，支持 X-Api-Key 或 Authorization: Bearer <token>"""
+        """按 MCP 规范从接口参数中提取 API Key（不再使用 Header）。
+
+        优先级：
+        1) JSON 请求体中的 api_key（含 JSON-RPC 包裹 params.api_key）
+        2) 查询字符串 ?api_key=...
+        3) 原始请求体 JSON 中的 api_key（对 type='http' 路由兜底），使用 cache=True
+        """
         try:
-            headers = request.httprequest.headers
-            api_key = headers.get('X-Api-Key') or headers.get('x-api-key')
-            if not api_key:
-                auth_header = headers.get('Authorization') or headers.get('authorization')
-                if auth_header and auth_header.lower().startswith('bearer '):
-                    api_key = auth_header.split(' ', 1)[1].strip()
-            return api_key
+            # 1) Odoo json 路由：request.jsonrequest 直接可用
+            if hasattr(request, 'jsonrequest') and isinstance(request.jsonrequest, dict):
+                body = request.jsonrequest
+                if 'api_key' in body and body['api_key']:
+                    return str(body['api_key']).strip()
+                if 'params' in body and isinstance(body['params'], dict) and body['params'].get('api_key'):
+                    return str(body['params']['api_key']).strip()
+
+            # 2) 查询字符串
+            try:
+                qs = request.httprequest.args
+                if qs:
+                    api_key = qs.get('api_key')
+                    if api_key:
+                        return str(api_key).strip()
+            except Exception:
+                pass
+
+            # 3) 原始请求体（type='http' 兜底），cache=True 避免后续读取失败
+            try:
+                raw = request.httprequest.get_data(cache=True, as_text=True) or ''
+                if raw:
+                    data = json.loads(raw)
+                    if isinstance(data, dict):
+                        if data.get('api_key'):
+                            return str(data['api_key']).strip()
+                        if isinstance(data.get('params'), dict) and data['params'].get('api_key'):
+                            return str(data['params']['api_key']).strip()
+            except Exception:
+                pass
         except Exception:
-            return None
+            pass
+        return None
 
     def _is_authorized(self, server_id=None):
         """校验请求是否携带有效 API Key。
@@ -335,7 +365,8 @@ class MCPServerController(http.Controller):
             # 读取原始请求体
             body = {}
             try:
-                raw = request.httprequest.get_data(cache=False, as_text=True) or ''
+                # 使用 cache=True，避免 _extract_api_key 已读取导致此处读取不到数据
+                raw = request.httprequest.get_data(cache=True, as_text=True) or ''
                 if raw:
                     body = json.loads(raw)
                 if isinstance(body, dict) and 'params' in body and isinstance(body['params'], dict):

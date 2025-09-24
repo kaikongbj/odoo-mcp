@@ -1,3 +1,28 @@
+---
+
+## 7) MCP 客户端配置 json 示例
+
+推荐在 MCP 客户端配置文件（如 mcp_config.json）中通过 `env` 字段传递 API Key：
+
+```json
+{
+  "mcpServers": {
+    "odoo-mcp": {
+      "url": "http://127.0.0.1:10888",
+      "transport": "streamable-http",
+      "env": {
+        "MCP_API_KEY": "your-mcp-server-api-key"
+      },
+      "disabled": false
+    }
+  }
+}
+```
+
+说明：
+- 只需在对应服务的 `env` 字段中添加 `MCP_API_KEY`（或 `FASTMCP_API_KEY`），即可实现无感授权。
+- 其它服务如 gitea/n8n/obsidian 也可用同样方式配置各自的 API Key。
+- 不需要在 tool 参数或命令行参数中传递 api_key。
 # MCP 服务器 API 使用文档
 
 本文档面向开发者与自动化脚本，系统性介绍 MCP 模块在 Odoo 中提供的 HTTP/JSON 接口与 GraphQL 能力，涵盖认证、端点说明、请求示例（PowerShell/curl）、以及常见问题与排错建议。
@@ -5,9 +30,11 @@
 ## 0. 基础说明
 
 - 版本与环境：Odoo 18，模块 `mcp_server`
-- 全部接口均需要 API Key 授权，支持两种方式：
-  - Header: `X-Api-Key: <YOUR_API_KEY>`
-  - 或 Header: `Authorization: Bearer <YOUR_API_KEY>`
+- 认证方式（符合 MCP 规范）：
+  - REST 路由：使用接口参数 `api_key` 进行授权（不使用 Header）。
+    - GET：通过查询参数传递，例如 `...?api_key=<YOUR_API_KEY>`
+    - POST：通过 JSON 请求体传递，例如 `{ "api_key": "<YOUR_API_KEY>", ... }`
+  - MCP 工具：不再在工具参数中携带 `api_key`。MCP 端会从连接的环境/上下文中提取授权信息（例如环境变量 MCP_API_KEY/FASTMCP_API_KEY/API_KEY，或客户端连接元数据中的 api_key）。
 - 多数据库环境建议在 URL 上带 `?db=<数据库名>`，例如 `...?db=kaikong18`
 - 示例中默认主机：`http://127.0.0.1:8069`
 
@@ -23,13 +50,13 @@
 
 - 路由：`GET /api/mcp/servers`
 - 说明：返回当前激活的 MCP 服务器列表
-- 请求头：需携带 API Key（任意激活服务器的 key 均可）
+- 认证方式：通过 `api_key` 接口参数（Query 或 JSON 体）。不使用 HTTP Header。
 - 响应数据：`[{id,name,server_url,port,state,last_connection}, ...]`
 
 PowerShell 示例（远端执行 curl）
 
 ```pwsh
-ssh 192.168.1.100 "curl -s -X GET -H 'X-Api-Key: <YOUR_API_KEY>' 'http://127.0.0.1:8069/api/mcp/servers?db=<DB>'"
+ssh 192.168.1.100 "curl -s -X GET 'http://127.0.0.1:8069/api/mcp/servers?db=<DB>&api_key=<YOUR_API_KEY>'"
 ```
 
 ### 1.2 获取资源列表
@@ -39,7 +66,7 @@ ssh 192.168.1.100 "curl -s -X GET -H 'X-Api-Key: <YOUR_API_KEY>' 'http://127.0.0
 - 响应数据：`[{id,name,resource_uri,resource_type,server_id,server_name,last_fetch}, ...]`
 
 ```pwsh
-ssh 192.168.1.100 "curl -s -X GET -H 'X-Api-Key: <YOUR_API_KEY>' 'http://127.0.0.1:8069/api/mcp/resources?db=<DB>'"
+ssh 192.168.1.100 "curl -s -X GET 'http://127.0.0.1:8069/api/mcp/resources?db=<DB>&api_key=<YOUR_API_KEY>'"
 ```
 
 ### 1.3 获取单个资源内容
@@ -48,7 +75,7 @@ ssh 192.168.1.100 "curl -s -X GET -H 'X-Api-Key: <YOUR_API_KEY>' 'http://127.0.0
 - 响应数据：`{id,name,content,resource_uri,server_id,server_name,resource_type,last_fetch}`
 
 ```pwsh
-ssh 192.168.1.100 "curl -s -X GET -H 'X-Api-Key: <YOUR_API_KEY>' 'http://127.0.0.1:8069/api/mcp/resource/1?db=<DB>'"
+ssh 192.168.1.100 "curl -s -X GET 'http://127.0.0.1:8069/api/mcp/resource/1?db=<DB>&api_key=<YOUR_API_KEY>'"
 ```
 
 ### 1.4 FastMCP 代理（占位）
@@ -57,7 +84,7 @@ ssh 192.168.1.100 "curl -s -X GET -H 'X-Api-Key: <YOUR_API_KEY>' 'http://127.0.0
 - 说明：返回“服务器就绪”的简单 JSON（占位实现），用于连通性与权限校验。
 
 ```pwsh
-ssh 192.168.1.100 "curl -s -H 'X-Api-Key: <YOUR_API_KEY>' 'http://127.0.0.1:8069/api/mcp/server/1/fastmcp?db=<DB>'"
+ssh 192.168.1.100 "curl -s 'http://127.0.0.1:8069/api/mcp/server/1/fastmcp?db=<DB>&api_key=<YOUR_API_KEY>'"
 ```
 
 ### 1.5 启动/停止服务器与健康检查
@@ -68,9 +95,9 @@ ssh 192.168.1.100 "curl -s -H 'X-Api-Key: <YOUR_API_KEY>' 'http://127.0.0.1:8069
 
 ```pwsh
 # 启动
-ssh 192.168.1.100 "curl -s -X POST -H 'X-Api-Key: <YOUR_API_KEY>' 'http://127.0.0.1:8069/api/mcp/server/1/start?db=<DB>'"
+ssh 192.168.1.100 "curl -s -X POST 'http://127.0.0.1:8069/api/mcp/server/1/start?db=<DB>&api_key=<YOUR_API_KEY>'"
 # 健康
-ssh 192.168.1.100 "curl -s -H 'X-Api-Key: <YOUR_API_KEY>' 'http://127.0.0.1:8069/api/mcp/server/1/health?db=<DB>'"
+ssh 192.168.1.100 "curl -s 'http://127.0.0.1:8069/api/mcp/server/1/health?db=<DB>&api_key=<YOUR_API_KEY>'"
 ```
 
 ---
@@ -84,13 +111,13 @@ GraphQL 接口暴露于两个路由，功能一致：
 
 两者请求体统一为 JSON，字段：
 
+- `api_key`: 授权所需的密钥（必填）
 - `query`: GraphQL 查询/变更字符串
 - `variables`: 变量对象（可选）
 
 示例 Header：
 
 - `Content-Type: application/json`
-- 授权二选一：`X-Api-Key: <YOUR_API_KEY>` 或 `Authorization: Bearer <YOUR_API_KEY>`
 
 注意：
 
@@ -102,8 +129,7 @@ GraphQL 接口暴露于两个路由，功能一致：
 ```pwsh
 ssh 192.168.1.100 "curl -s -X POST \
   -H 'Content-Type: application/json' \
-  -H 'X-Api-Key: <YOUR_API_KEY>' \
-  --data '{"query":"query { models }"}' \
+  --data '{"api_key":"<YOUR_API_KEY>","query":"query { models }"}' \
   'http://127.0.0.1:8069/api/mcp/graphql?db=<DB>'"
 ```
 
@@ -167,6 +193,7 @@ mutation($vals: JSONString!) {
   createRecord(model: "res.partner", values: $vals)
 }
 ```
+
 变量：
 
 ```json
@@ -180,6 +207,7 @@ mutation($id:Int!, $vals:JSONString!) {
   updateRecord(model:"res.partner", id:$id, values:$vals)
 }
 ```
+
 变量：
 
 ```json
@@ -203,7 +231,7 @@ $q = @"
 mutation($vals: JSONString!) { createRecord(model: "res.partner", values: $vals) }
 "@
 $vars = @{ vals = '{"name":"GQL Test Partner"}' } | ConvertTo-Json -Compress
-ssh 192.168.1.100 "curl -s -X POST -H 'Content-Type: application/json' -H 'X-Api-Key: <YOUR_API_KEY>' --data '{"query":$($q | ConvertTo-Json),"variables":$vars}' 'http://127.0.0.1:8069/api/mcp/graphql?db=<DB>'"
+ssh 192.168.1.100 "curl -s -X POST -H 'Content-Type: application/json' --data '{"api_key":"<YOUR_API_KEY>","query":$($q | ConvertTo-Json),"variables":$vars}' 'http://127.0.0.1:8069/api/mcp/graphql?db=<DB>'"
 ```
 
 ### 2.6 模型与字段元数据
@@ -252,21 +280,100 @@ query {
 
 ```pwsh
 # 服务器列表
-ssh 192.168.1.100 "curl -s -H 'X-Api-Key: <YOUR_API_KEY>' 'http://127.0.0.1:8069/api/mcp/servers?db=<DB>'"
+ssh 192.168.1.100 "curl -s 'http://127.0.0.1:8069/api/mcp/servers?db=<DB>&api_key=<YOUR_API_KEY>'"
 
 # 资源列表
-ssh 192.168.1.100 "curl -s -H 'X-Api-Key: <YOUR_API_KEY>' 'http://127.0.0.1:8069/api/mcp/resources?db=<DB>'"
+ssh 192.168.1.100 "curl -s 'http://127.0.0.1:8069/api/mcp/resources?db=<DB>&api_key=<YOUR_API_KEY>'"
 
 # GraphQL - 模型列表
-ssh 192.168.1.100 "curl -s -X POST -H 'Content-Type: application/json' -H 'X-Api-Key: <YOUR_API_KEY>' --data '{"query":"query { models }"}' 'http://127.0.0.1:8069/api/mcp/graphql?db=<DB>'"
+ssh 192.168.1.100 "curl -s -X POST -H 'Content-Type: application/json' --data '{"api_key":"<YOUR_API_KEY>","query":"query { models }"}' 'http://127.0.0.1:8069/api/mcp/graphql?db=<DB>'"
 
 # GraphQL - 记录列表
-ssh 192.168.1.100 "curl -s -X POST -H 'Content-Type: application/json' -H 'X-Api-Key: <YOUR_API_KEY>' --data '{"query":"query { odooRecords(model: \"res.partner\", domain: \"[]\", fields: [\"name\"], limit: 3) }"}' 'http://127.0.0.1:8069/api/mcp/graphql?db=<DB>'"
+ssh 192.168.1.100 "curl -s -X POST -H 'Content-Type: application/json' --data '{"api_key":"<YOUR_API_KEY>","query":"query { odooRecords(model: \"res.partner\", domain: \"[]\", fields: [\"name\"], limit: 3) }"}' 'http://127.0.0.1:8069/api/mcp/graphql?db=<DB>'"
 
 # GraphQL - 创建/更新/删除（变量示意）
-ssh 192.168.1.100 "curl -s -X POST -H 'Content-Type: application/json' -H 'X-Api-Key: <YOUR_API_KEY>' --data '{"query":"mutation($vals: JSONString!) { createRecord(model: \"res.partner\", values: $vals) }","variables":{"vals":"{\\"name\\":\\"GQL Test Partner\\"}"}}' 'http://127.0.0.1:8069/api/mcp/graphql?db=<DB>'"
+ssh 192.168.1.100 "curl -s -X POST -H 'Content-Type: application/json' --data '{"api_key":"<YOUR_API_KEY>","query":"mutation($vals: JSONString!) { createRecord(model: \"res.partner\", values: $vals) }","variables":{"vals":"{\\"name\\":\\"GQL Test Partner\\"}"}}' 'http://127.0.0.1:8069/api/mcp/graphql?db=<DB>'"
 ```
 
 ---
 
 如需更复杂的使用范式（联动 FastMCP 工具、GraphQL 扩展字段/权限过滤等），可在 `mcp_server/services/graphql_schema.py` 中扩展查询/变更定义或引入更多工具。
+
+---
+
+## 6) MCP 工具签名与调用示例（重要）
+
+从 vX.Y 开始，MCP 工具改为基于“连接上下文/环境变量”进行授权，不再在工具参数中传递 `api_key`。这更符合 MCP 生态的通用实践，降低凭证在日志与调用链中的暴露概率。
+
+常见授权来源（仅限客户端提供的连接上下文）：
+
+- 连接上下文中的元数据字段（若客户端支持传递）：metadata/meta/env/environment/params/client_info/headers 中的 `api_key`/`mcp_api_key`/`apikey`/`token`
+
+安全说明：服务器端不会从自身进程环境变量回退读取 api_key，必须由客户端在连接时显式提供；否则将返回 401 Unauthorized。
+
+工具签名（节选）：
+
+- query_odoo_model(model_name: string, domain?: string, fields?: string, limit?: int, offset?: int, order?: string, ctx?: Context)
+- get_odoo_record(model_name: string, record_id: int, ctx?: Context)
+- create_odoo_record(model_name: string, values: object, ctx?: Context)
+- update_odoo_record(model_name: string, record_id: int, values: object, ctx?: Context)
+- delete_odoo_record(model_name: string, record_id: int, ctx?: Context)
+- get_odoo_model_metadata(model_name: string, ctx?: Context)
+- list_resources(ctx: Context)
+- get_resource_content(resource_uri: string, ctx: Context)
+- graphql(query: string, variables?: object, ctx?: Context)
+
+注意：
+
+- api_key 仍需与目标 `mcp.server` 记录完全一致；未通过授权时，工具会返回 `{ code: 401, message: "Unauthorized" }` 或 `{ errors: ["Unauthorized"] }`。
+- ctx 由 MCP 运行时注入；你无需在调用参数中显式提供。
+
+客户端集成要点：
+
+- 若你的 MCP 客户端支持为连接传入上下文/元数据，请放入 `api_key` 字段；或在启动“客户端进程”前设置环境变量 `MCP_API_KEY`（或 `FASTMCP_API_KEY`/`API_KEY`）。注意这里的环境变量指客户端侧，而非 Odoo 服务器进程的环境。
+- REST 仅作为辅助/诊断接口；生产集成建议优先使用 MCP 协议与工具调用。
+
+---
+
+## 7) MCP 客户端配置 json 示例
+
+推荐在 MCP 客户端配置文件（如 mcp_config.json）中通过 `env` 字段传递 API Key：
+
+```json
+{
+  "mcpServers": {
+    "odoo-mcp": {
+      "env": {
+        "MCP_API_KEY": "your-mcp-server-api-key"
+      }
+    }
+  }
+}
+```
+
+### 7.1 直接使用 streamable-http/sse 直连（无需桥接器）
+
+若你的 MCP 客户端支持通过 URL 直连（推荐），可在配置中直接声明服务端地址与传输类型：
+
+```json
+{
+  "mcpServers": {
+    "odoo-mcp": {
+      "url": "<http://127.0.0.1:10888>",
+      "transport": "streamable-http",
+      "env": {
+        "MCP_API_KEY": "your-mcp-server-api-key"
+      },
+      "metadata": {
+        "api_key": "your-mcp-server-api-key"
+      }
+    }
+  }
+}
+```
+
+说明：
+
+- transport 可选 `streamable-http`（优先）或 `sse`（老版本 fastmcp 回退）。
+- 授权建议使用“客户端进程”的环境变量 `MCP_API_KEY`；若客户端支持，也可在 `metadata.api_key` 中附带。服务器端不会从其自身环境变量中读取 api_key。
+- 直连模式下，无需配置 `command/args`，客户端将直接通过 HTTP 连接至 Odoo 内置的 FastMCP 服务。

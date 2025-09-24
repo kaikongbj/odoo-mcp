@@ -16,9 +16,8 @@ class TestAPIAuthentication(HttpCase):
             'state': 'active',
         })
 
-    def _open_json(self, url, headers=None):
-        headers = headers or {}
-        res = self.url_open(url, headers=headers)
+    def _open_json(self, url):
+        res = self.url_open(url)
         # url_open 可能返回 bytes 或 str
         if isinstance(res, bytes):
             res = res.decode('utf-8')
@@ -38,15 +37,25 @@ class TestAPIAuthentication(HttpCase):
         self.assertIn('code', data)
         self.assertEqual(data['code'], 401)
 
-    def test_fastmcp_proxy_authorized_with_header(self):
-        # 使用 X-Api-Key 头部应通过
-        url = f"/api/mcp/server/{self.server.id}/fastmcp"
-        data = self._open_json(url, headers={'X-Api-Key': self.server.api_key})
+    def test_fastmcp_proxy_authorized_with_query_param(self):
+        # 使用查询参数 api_key 应通过
+        url = f"/api/mcp/server/{self.server.id}/fastmcp?api_key={self.server.api_key}"
+        data = self._open_json(url)
         self.assertEqual(data.get('status'), 'success')
 
-    def test_fastmcp_proxy_authorized_with_bearer(self):
-        # 使用 Authorization: Bearer 应通过
+    def test_fastmcp_proxy_authorized_with_body_param(self):
+        # 使用 body JSON 携带 api_key（type='http' 路由可用）
         url = f"/api/mcp/server/{self.server.id}/fastmcp"
-        headers = {'Authorization': f"Bearer {self.server.api_key}"}
-        data = self._open_json(url, headers=headers)
+        payload = json.dumps({'api_key': self.server.api_key}).encode('utf-8')
+        res = self.url_open(url, data=payload, headers={'Content-Type': 'application/json'})
+        if hasattr(res, 'data'):
+            raw = res.data
+        else:
+            raw = res
+        if isinstance(raw, bytes):
+            raw = raw.decode('utf-8')
+        try:
+            data = json.loads(raw)
+        except Exception:
+            data = {}
         self.assertEqual(data.get('status'), 'success')

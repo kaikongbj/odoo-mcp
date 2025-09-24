@@ -2,287 +2,92 @@ import asyncio
 import logging
 import os
 import socket
-import threading
 import time
+import threading
 from contextlib import contextmanager
-from queue import Queue, Empty
-from typing import Dict, Any, Optional
+from typing import Any, Dict, Optional
+
+import odoo
+from odoo import api, fields, SUPERUSER_ID
 
 from fastmcp import FastMCP, Context
-from odoo import api, fields
-from odoo.http import request
-from odoo.modules.registry import Registry
 
 _logger = logging.getLogger(__name__)
 
 
 class SafeDatabaseManager:
-    """安全数据库管理器 - 管理数据库连接池和线程安全的数据库操作"""
-    
-    def __init__(self, pool_size=10, connection_timeout=30):
-        """初始化数据库管理器
-        
-        Args:
-            pool_size: 连接池大小
-            connection_timeout: 连接超时时间（秒）
-        """
-        self.pool_size = pool_size
-        self.connection_timeout = connection_timeout
-        self.connection_pools = {}  # 每个数据库的连接池
-        self.pool_locks = {}  # 每个连接池的锁
-        self._main_lock = threading.Lock()
-        
-        _logger.info("SafeDatabaseManager初始化完成，连接池大小: %d, 超时: %d秒", 
-                    pool_size, connection_timeout)
-    
-    def _get_db_name(self):
-        """获取当前数据库名称"""
-        try:
-            # 尝试从请求中获取
-            if hasattr(request, 'db') and request.db:
-                return request.db
-        except Exception:
-            pass
+    """提供在独立连接中安全获取 Odoo 环境的工具。"""
 
-        try:
-            # 从配置中获取
-            import odoo.tools.config as config
-            db_name = config.get('db_name')
-            if db_name:
-                return db_name
+    def __init__(self, db_name: str, uid: int = SUPERUSER_ID, context: Optional[Dict[str, Any]] = None) -> None:
+        self.db_name = db_name
+        self.uid = uid
+        self.context = context or {}
 
-            # 获取可用数据库列表并选择第一个
-            from odoo.service.db import list_dbs
-            dbs = list_dbs(True)
-            if dbs:
-                return dbs[0]
-        except Exception as e:
-            _logger.error("获取数据库名称失败: %s", str(e))
-
-        return None
-    
-    def _get_connection_pool(self, db_name):
-        """获取指定数据库的连接池"""
-        with self._main_lock:
-            if db_name not in self.connection_pools:
-                # 创建新的连接池
-                self.connection_pools[db_name] = Queue(maxsize=self.pool_size)
-                self.pool_locks[db_name] = threading.Lock()
-                _logger.info("为数据库 '%s' 创建了新的连接池", db_name)
-            
-            return self.connection_pools[db_name], self.pool_locks[db_name]
-    
-    def _create_connection(self, db_name):
-        """创建新的数据库连接"""
-        try:
-            registry = Registry(db_name)
-            cursor = registry.cursor()
-            _logger.debug("为数据库 '%s' 创建了新连接", db_name)
-            return cursor
-        except Exception as e:
-            _logger.error("创建数据库连接失败: %s", str(e))
-            raise
-    
-    def _get_connection(self, db_name):
-        """从连接池获取连接"""
-        pool, pool_lock = self._get_connection_pool(db_name)
-        
-        try:
-            # 尝试从池中获取连接
-            cursor = pool.get_nowait()
-            # 检查连接健康状态
-            if self._check_connection_health(cursor):
-                _logger.debug("从连接池获取了健康的连接")
-                return cursor
-            else:
-                # 连接不健康，关闭并创建新连接
-                _logger.debug("连接不健康，创建新连接")
-                try:
-                    cursor.close()
-                except:
-                    pass
-                return self._create_connection(db_name)
-        except Empty:
-            # 池中没有可用连接，创建新连接
-            _logger.debug("连接池为空，创建新连接")
-            return self._create_connection(db_name)
-    
-    def _release_connection(self, db_name, cursor):
-        """释放连接回连接池"""
-        if not cursor:
-            return
-            
-        pool, pool_lock = self._get_connection_pool(db_name)
-        
-        try:
-            # 检查连接健康状态
-            if self._check_connection_health(cursor):
-                # 尝试将连接放回池中
-                try:
-                    pool.put_nowait(cursor)
-                    _logger.debug("连接已释放回连接池")
-                except:
-                    # 池已满，关闭连接
-                    _logger.debug("连接池已满，关闭连接")
-                    cursor.close()
-            else:
-                # 连接不健康，直接关闭
-                _logger.debug("连接不健康，直接关闭")
-                cursor.close()
-        except Exception as e:
-            _logger.error("释放连接时出错: %s", str(e))
-            try:
-                cursor.close()
-            except:
-                pass
-    
-    def _check_connection_health(self, cursor):
-        """检查数据库连接健康状态"""
-        try:
-            if not cursor or cursor.closed:
-                return False
-            # 执行简单查询检查连接
-            cursor.execute("SELECT 1")
-            cursor.fetchone()
-            return True
-        except Exception as e:
-            _logger.debug("连接健康检查失败: %s", str(e))
-            return False
-    
     @contextmanager
-    def get_env(self, db_name=None):
-        """获取安全的Odoo环境上下文管理器"""
-        if not db_name:
-            db_name = self._get_db_name()
-        
-        if not db_name:
-            raise Exception("无法获取数据库名称")
-        
-        cursor = None
-        try:
-            cursor = self._get_connection(db_name)
-            env = api.Environment(cursor, 1, {})  # 使用SUPERUSER_ID
-            _logger.debug("成功创建安全的Odoo环境")
-            yield env
-            # 提交事务
-            cursor.commit()
-        except Exception as e:
-            _logger.error("数据库操作失败: %s", str(e))
-            if cursor:
-                try:
-                    cursor.rollback()
-                except:
-                    pass
-            raise
-        finally:
-            if cursor:
-                self._release_connection(db_name, cursor)
-    
+    def get_env(self):
+        with api.Environment.manage():
+            registry = odoo.registry(self.db_name)
+            with registry.cursor() as cr:
+                env = api.Environment(cr, self.uid, dict(self.context))
+                yield env
+
     async def execute_with_env(self, operation, *args, **kwargs):
-        """安全执行数据库操作的异步方法"""
-        db_name = self._get_db_name()
-        if not db_name:
-            raise Exception("无法获取数据库名称")
-        
-        # 在线程池中执行数据库操作
-        loop = asyncio.get_event_loop()
-        
-        def sync_operation():
-            with self.get_env(db_name) as env:
+        """在独立的 Odoo 环境中执行一个同步 operation(operation 接收 env 作为第一个参数)。"""
+        def runner():
+            with self.get_env() as env:
                 return operation(env, *args, **kwargs)
-        
-        try:
-            result = await loop.run_in_executor(None, sync_operation)
-            return result
-        except Exception as e:
-            _logger.error("异步数据库操作失败: %s", str(e))
-            raise
-    
-    def cleanup_connections(self, db_name=None):
-        """清理连接池中的所有连接"""
-        if db_name:
-            databases = [db_name]
-        else:
-            databases = list(self.connection_pools.keys())
-        
-        for db in databases:
-            if db in self.connection_pools:
-                pool = self.connection_pools[db]
-                closed_count = 0
-                
-                while True:
-                    try:
-                        cursor = pool.get_nowait()
-                        cursor.close()
-                        closed_count += 1
-                    except Empty:
-                        break
-                    except Exception as e:
-                        _logger.error("关闭连接时出错: %s", str(e))
-                
-                _logger.info("已清理数据库 '%s' 的 %d 个连接", db, closed_count)
+
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, runner)
 
 
 class FastMCPService:
-    """FastMCP服务实现类，用于在Odoo中集成FastMCP功能"""
+    """FastMCP 服务类：管理 FastMCP 服务器、工具与资源注册、以及数据库安全访问。"""
 
-    _instance = None
-    _lock = threading.Lock()
+    _instance: Optional["FastMCPService"] = None
 
     @classmethod
-    def get_instance(cls):
-        """获取FastMCP服务的单例实例"""
-        if cls._instance is None:
-            with cls._lock:
-                if cls._instance is None:
-                    cls._instance = cls()
+    def get_instance(cls) -> "FastMCPService":
+        if not cls._instance:
+            cls._instance = cls()
         return cls._instance
 
-    def __init__(self):
-        """初始化FastMCP服务"""
-        self.mcp_servers = {}  # 存储MCP服务器实例
-        self.event_loop = None
-        self._event_loop_thread = None
-        # 初始化安全数据库管理器
-        self.db_manager = SafeDatabaseManager(pool_size=20, connection_timeout=30)
-        self.init_event_loop()
+    def __init__(self) -> None:
+        self.mcp_servers: Dict[int, Any] = {}
+        self.db_manager: Optional[SafeDatabaseManager] = None
 
-    def init_event_loop(self):
-        """初始化异步事件循环并在后台线程中运行"""
-        try:
-            _logger.info("开始初始化FastMCP事件循环")
-            self.event_loop = asyncio.new_event_loop()
+        # 独立事件循环线程
+        self.event_loop = asyncio.new_event_loop()
 
-            # 创建并启动事件循环线程
-            def run_event_loop(loop):
-                _logger.info("在后台线程中运行FastMCP事件循环")
-                asyncio.set_event_loop(loop)
+        def run_event_loop(loop: asyncio.AbstractEventLoop):
+            asyncio.set_event_loop(loop)
+            try:
+                loop.run_forever()
+            except Exception as e:
+                _logger.error("事件循环运行异常: %s", str(e))
+            finally:
+                _logger.info("事件循环结束")
                 try:
-                    loop.run_forever()
-                except Exception as e:
-                    _logger.error("事件循环运行异常: %s", str(e))
-                finally:
-                    _logger.info("事件循环结束")
                     loop.close()
+                except Exception:
+                    pass
 
-            # 创建并启动守护线程
-            self._event_loop_thread = threading.Thread(
-                target=run_event_loop,
-                args=(self.event_loop,),
-                daemon=True,
-                name="FastMCP-EventLoop"
-            )
-            self._event_loop_thread.start()
+        self._event_loop_thread = threading.Thread(
+            target=run_event_loop,
+            args=(self.event_loop,),
+            daemon=True,
+            name="FastMCP-EventLoop",
+        )
+        self._event_loop_thread.start()
 
-            # 等待事件循环启动
-            time.sleep(0.5)  # 等待循环启动
+        # 等待事件循环启动
+        time.sleep(0.5)
+        _logger.info(
+            "FastMCP事件循环已初始化并在后台运行，循环对象信息: %s, 运行状态: %s",
+            self.event_loop,
+            self.event_loop.is_running(),
+        )
 
-            _logger.info("FastMCP事件循环已初始化并在后台运行，循环对象信息: %s, 运行状态: %s",
-                         self.event_loop, self.event_loop.is_running())
-        except Exception as e:
-            _logger.error("初始化FastMCP事件循环失败: %s", str(e))
-            import traceback
-            _logger.error("异常详情: %s", traceback.format_exc())
 
     def get_or_create_mcp_server(self, server_record):
         """获取或创建MCP服务器实例"""
@@ -294,6 +99,16 @@ class FastMCPService:
             return self.mcp_servers.get(server_id)
 
         try:
+            # 初始化数据库管理器（按需）
+            if not self.db_manager:
+                try:
+                    db_name = server_record.env.cr.dbname
+                except Exception:
+                    db_name = odoo.tools.config.get("db_name")
+                if not db_name:
+                    raise RuntimeError("无法确定数据库名称用于初始化 SafeDatabaseManager")
+                self.db_manager = SafeDatabaseManager(db_name=db_name)
+
             _logger.info("开始创建新的FastMCP服务器实例")
             # 创建新的FastMCP服务器实例
             mcp_server = FastMCP(name=server_record.name)
@@ -335,6 +150,8 @@ class FastMCPService:
         """
         try:
             _logger.debug("开始安全数据库操作执行")
+            if not self.db_manager:
+                raise RuntimeError("SafeDatabaseManager 未初始化")
             result = await self.db_manager.execute_with_env(operation, *args, **kwargs)
             _logger.debug("安全数据库操作执行成功")
             return result
@@ -690,19 +507,126 @@ class FastMCPService:
             }
         }
 
+    def _authorize_api_key_impl(self, env, api_key: Optional[str], server_id: int) -> bool:
+        """授权检查实现：校验 api_key 是否匹配给定服务器
+
+        要求：
+        - api_key 必填且与目标 mcp.server 记录的 api_key 一致
+        - 服务器必须 active=True
+        """
+        if not api_key:
+            raise ValueError("Unauthorized")
+        srv = env['mcp.server'].sudo().browse(server_id)
+        if not srv.exists() or not srv.active:
+            raise ValueError("Unauthorized")
+        # 精确匹配该服务器的 api_key
+        if str(api_key) != str(srv.api_key or ''):
+            raise ValueError("Unauthorized")
+        return True
+
+    def _extract_api_key_from_ctx(self, ctx: Optional[Context]) -> Optional[str]:
+        """仅从“客户端提供的 MCP 连接上下文”中提取 api_key。
+
+        安全准则：不从服务器自身进程环境变量读取，避免“未提供 api_key 也能通过”的风险。
+
+        可用来源（由客户端在握手时注入）：
+        - ctx.metadata / ctx.meta / ctx.env / ctx.environment / ctx.params / ctx.client_info / ctx.headers
+        - 兼容 dict-like: ctx.get('api_key')
+        """
+        if not ctx:
+            return None
+
+        try:
+            for attr in ("metadata", "meta", "env", "environment", "params", "client_info", "headers"):
+                d = getattr(ctx, attr, None)
+                if isinstance(d, dict):
+                    # 支持常见小写与大写键名（客户端可能把环境变量透传为大写键）
+                    for k in (
+                        "api_key", "mcp_api_key", "apikey", "token",
+                        "MCP_API_KEY", "FASTMCP_API_KEY", "API_KEY",
+                    ):
+                        v = d.get(k)
+                        if v:
+                            return str(v)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(ctx, "get"):
+                v = ctx.get("api_key")
+                if v:
+                    return str(v)
+        except Exception:
+            pass
+
+        return None
+
+    async def _ensure_authorized_ctx(self, ctx: Optional[Context], server_id: int) -> bool:
+        """统一授权入口：从 ctx 中提取 api_key 并校验"""
+        try:
+            key = self._extract_api_key_from_ctx(ctx)
+            ok = await self._safe_execute_with_env(self._authorize_api_key_impl, key, server_id)
+            return bool(ok)
+        except Exception:
+            if ctx:
+                try:
+                    await ctx.error("Unauthorized")
+                except Exception:
+                    pass
+            return False
+
+    async def _graphql_impl(self, server_id: int, query: str, variables: Optional[Dict[str, Any]], ctx: Optional[Context]) -> Dict[str, Any]:
+        """GraphQL 执行实现，供工具委托调用"""
+        try:
+            if not await self._ensure_authorized_ctx(ctx, server_id):
+                return {"errors": ["Unauthorized"], "code": 401}
+            from .graphql_schema import build_schema
+            schema = build_schema()
+
+            def sync_op(env):
+                return schema.execute(
+                    query,
+                    variable_values=(variables or {}),
+                    context_value={"env": env},
+                )
+
+            result = await self._safe_execute_with_env(lambda env: sync_op(env))
+            payload: Dict[str, Any] = {}
+            if getattr(result, "errors", None):
+                payload["errors"] = [str(e) for e in result.errors]
+            if getattr(result, "data", None) is not None:
+                payload["data"] = result.data
+
+            if ctx:
+                if payload.get("errors"):
+                    await ctx.error(f"GraphQL 执行出现 {len(payload['errors'])} 个错误")
+                else:
+                    await ctx.info("GraphQL 查询执行成功")
+            return payload
+        except Exception as e:
+            _logger.error("GraphQL 执行失败: %s", str(e))
+            if ctx:
+                try:
+                    await ctx.error(f"GraphQL 执行失败: {str(e)}")
+                except Exception:
+                    pass
+            return {"errors": [str(e)]}
+
     def _register_default_tools(self, mcp_server, server_record):
         """注册默认工具到FastMCP服务器"""
+
+        # 使用类方法进行授权检查
 
         # ===== Odoo数据访问工具 =====
         @mcp_server.tool()
         async def query_odoo_model(
-                model_name: str,
-                domain: Optional[str] = None,
-                fields: Optional[str] = None,
-                limit: int = 100,
-                offset: int = 0,
-                order: Optional[str] = None,
-                ctx: Context = None
+            model_name: str,
+            domain: Optional[str] = None,
+            fields: Optional[str] = None,
+            limit: int = 100,
+            offset: int = 0,
+            order: Optional[str] = None,
+            ctx: Context = None,
         ) -> Dict[str, Any]:
             """查询任意Odoo模型的数据
             
@@ -718,6 +642,9 @@ class FastMCPService:
                 包含查询结果的字典
             """
             try:
+                # 授权校验（从 ctx / 环境 读取 api_key）
+                if not await self._ensure_authorized_ctx(ctx, server_record.id):
+                    return {"status": "error", "code": 401, "message": "Unauthorized"}
                 if ctx:
                     await ctx.info(f"开始查询模型 '{model_name}'，参数: domain={domain}, fields={fields}")
 
@@ -753,6 +680,8 @@ class FastMCPService:
                 包含记录详细信息的字典
             """
             try:
+                if not await self._ensure_authorized_ctx(ctx, server_record.id):
+                    return {"status": "error", "code": 401, "message": "Unauthorized"}
                 # 使用安全执行方法
                 result = await self._safe_execute_with_env(
                     self._get_odoo_record_impl,
@@ -782,6 +711,8 @@ class FastMCPService:
                 包含新创建记录信息的字典
             """
             try:
+                if not await self._ensure_authorized_ctx(ctx, server_record.id):
+                    return {"status": "error", "code": 401, "message": "Unauthorized"}
                 # 使用安全执行方法
                 result = await self._safe_execute_with_env(
                     self._create_odoo_record_impl,
@@ -814,6 +745,8 @@ class FastMCPService:
                 包含更新后记录信息的字典
             """
             try:
+                if not await self._ensure_authorized_ctx(ctx, server_record.id):
+                    return {"status": "error", "code": 401, "message": "Unauthorized"}
                 # 使用安全执行方法
                 result = await self._safe_execute_with_env(
                     self._update_odoo_record_impl,
@@ -843,6 +776,8 @@ class FastMCPService:
                 删除操作的结果
             """
             try:
+                if not await self._ensure_authorized_ctx(ctx, server_record.id):
+                    return {"status": "error", "code": 401, "message": "Unauthorized"}
                 # 使用安全执行方法
                 result = await self._safe_execute_with_env(
                     self._delete_odoo_record_impl,
@@ -873,6 +808,8 @@ class FastMCPService:
                 包含模型元数据信息的字典
             """
             try:
+                if not await self._ensure_authorized_ctx(ctx, server_record.id):
+                    return {"status": "error", "code": 401, "message": "Unauthorized"}
                 # 使用安全执行方法
                 result = await self._safe_execute_with_env(
                     self._get_odoo_model_metadata_impl,
@@ -895,12 +832,12 @@ class FastMCPService:
         async def list_resources(ctx: Context) -> Dict[str, Any]:
             """列出当前MCP服务器上的所有可用资源"""
             try:
-                # 使用安全执行方法
+                if not await self._ensure_authorized_ctx(ctx, server_record.id):
+                    return {"status": "error", "code": 401, "message": "Unauthorized"}
                 result = await self._safe_execute_with_env(
                     self._list_resources_impl,
-                    server_record.id
+                    server_record.id,
                 )
-
                 data = result.get('data', [])
                 await ctx.info(f"获取到 {len(data)} 个资源")
                 return result
@@ -913,12 +850,13 @@ class FastMCPService:
         async def get_resource_content(resource_uri: str, ctx: Context) -> Dict[str, Any]:
             """获取指定URI的资源内容"""
             try:
-                # 使用安全执行方法
+                if not await self._ensure_authorized_ctx(ctx, server_record.id):
+                    return {"status": "error", "code": 401, "message": "Unauthorized"}
                 result = await self._safe_execute_with_env(
                     self._get_resource_content_impl,
-                    server_record.id, resource_uri
+                    server_record.id,
+                    resource_uri,
                 )
-
                 data = result.get('data', {})
                 resource_name = data.get('name', resource_uri)
                 await ctx.info(f"成功获取资源: {resource_name}")
@@ -930,52 +868,8 @@ class FastMCPService:
 
         # ===== GraphQL 工具 =====
         @mcp_server.tool()
-        async def graphql(query: str, variables: Optional[Dict[str, Any]] = None, ctx: Context = None) -> Dict[
-            str, Any]:
-            """执行针对 Odoo 的 GraphQL 查询
-
-            Args:
-                query: GraphQL 查询字符串
-                variables: 变量字典
-
-            Returns:
-                执行结果，包含 data 或 errors
-            """
-            try:
-                # 延迟导入，避免可选依赖在无用时造成模块加载失败
-                from .graphql_schema import build_schema
-
-                schema = build_schema()
-
-                def sync_op(env):
-                    context_value = {'env': env}
-                    return schema.execute(
-                        query,
-                        variable_values=variables or {},
-                        context_value=context_value,
-                    )
-
-                # 使用安全环境执行
-                result = await self._safe_execute_with_env(lambda env: sync_op(env))
-
-                payload: Dict[str, Any] = {}
-                if result.errors:
-                    payload['errors'] = [str(e) for e in result.errors]
-                if result.data is not None:
-                    payload['data'] = result.data
-
-                if ctx:
-                    if result.errors:
-                        await ctx.error(f"GraphQL 执行出现 {len(result.errors)} 个错误")
-                    else:
-                        await ctx.info("GraphQL 查询执行成功")
-
-                return payload
-            except Exception as e:
-                _logger.error("GraphQL 执行失败: %s", str(e))
-                if ctx:
-                    await ctx.error(f"GraphQL 执行失败: {str(e)}")
-                return {"errors": [str(e)]}
+        async def graphql(query: str, variables: Optional[Dict[str, Any]] = None, ctx: Context = None) -> Dict[str, Any]:
+            return await self._graphql_impl(server_record.id, query, variables, ctx)
 
     def _register_default_resources(self, mcp_server, server_record):
         """注册默认资源到FastMCP服务器"""
@@ -984,6 +878,8 @@ class FastMCPService:
         def get_server_info():
             """获取服务器基本信息"""
             try:
+                if not self.db_manager:
+                    raise RuntimeError("SafeDatabaseManager 未初始化")
                 with self.db_manager.get_env() as env:
                     return self._get_server_info_impl(env, server_record.id)
             except Exception as e:
@@ -994,6 +890,8 @@ class FastMCPService:
         def get_resources_list():
             """获取所有资源列表"""
             try:
+                if not self.db_manager:
+                    raise RuntimeError("SafeDatabaseManager 未初始化")
                 with self.db_manager.get_env() as env:
                     return self._list_resources_impl(env, server_record.id)
             except Exception as e:
@@ -1004,6 +902,8 @@ class FastMCPService:
         def get_resource(resource_id: int):
             """获取指定ID的资源"""
             try:
+                if not self.db_manager:
+                    raise RuntimeError("SafeDatabaseManager 未初始化")
                 with self.db_manager.get_env() as env:
                     return self._get_resource_by_id_impl(env, server_record.id, resource_id)
             except Exception as e:
@@ -1118,7 +1018,6 @@ class FastMCPService:
             _logger.info("尝试启动FastMCP服务器")
 
             # 创建事件标志和错误存储
-            import threading
             from multiprocessing import Event
             server_started = Event()
             server_error = [None]

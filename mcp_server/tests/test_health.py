@@ -15,9 +15,8 @@ class TestHealthEndpoint(HttpCase):
             'state': 'active',
         })
 
-    def _open_json(self, url, headers=None):
-        headers = headers or {}
-        res = self.url_open(url, headers=headers)
+    def _open_json(self, url):
+        res = self.url_open(url)
         # url_open 可能返回 bytes 或 str
         if isinstance(res, bytes):
             res = res.decode('utf-8')
@@ -36,9 +35,8 @@ class TestHealthEndpoint(HttpCase):
         assert data.get('code') == 401
 
     def test_health_authorized(self):
-        url = f"/api/mcp/server/{self.server.id}/health"
-        headers = {'X-Api-Key': self.server.api_key}
-        data = self._open_json(url, headers=headers)
+        url = f"/api/mcp/server/{self.server.id}/health?api_key={self.server.api_key}"
+        data = self._open_json(url)
         assert data.get('status') in ('success', 'error')  # 允许失败但格式正确
         # 若成功应包含必要字段
         if data.get('status') == 'success':

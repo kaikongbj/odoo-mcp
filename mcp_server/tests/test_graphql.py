@@ -21,9 +21,8 @@ class TestGraphQLViaMCP(HttpCase):
             'resource_type': 'file',
         })
 
-    def _open_json(self, url, headers=None):
-        headers = headers or {}
-        res = self.url_open(url, headers=headers)
+    def _open_json(self, url):
+        res = self.url_open(url)
         if isinstance(res, bytes):
             res = res.decode('utf-8')
         try:
@@ -37,6 +36,6 @@ class TestGraphQLViaMCP(HttpCase):
     def test_graphql_query_servers(self):
         # 通过 FastMCP 初始化后，GraphQL 作为工具对外暴露，
         # 这里仅做冒烟：调用 fastmcp 代理接口确保服务可达
-        url = f"/api/mcp/server/{self.server.id}/fastmcp"
-        data = self._open_json(url, headers={'X-Api-Key': self.server.api_key})
+        url = f"/api/mcp/server/{self.server.id}/fastmcp?api_key={self.server.api_key}"
+        data = self._open_json(url)
         self.assertEqual(data.get('status'), 'success')

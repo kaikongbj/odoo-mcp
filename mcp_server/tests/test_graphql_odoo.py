@@ -18,10 +18,10 @@ class TestGraphQLForOdoo(HttpCase):
         })
 
     def _post_graphql(self, query, variables=None):
-        body = json.dumps({'query': query, 'variables': variables or {}}).encode('utf-8')
+        payload = {'query': query, 'variables': variables or {}, 'api_key': self.server.api_key}
+        body = json.dumps(payload).encode('utf-8')
         headers = {
             'Content-Type': 'application/json',
-            'X-Api-Key': self.server.api_key,
         }
         res = self.url_open('/api/mcp/graphql', data=body, headers=headers)
         if hasattr(res, 'data'):

@@ -247,3 +247,144 @@ class MCPServerController(http.Controller):
         except Exception as e:
             _logger.error("健康检查接口失败: %s", str(e))
             return {'status': 'error', 'message': str(e)}
+
+    # ----------------------
+    # GraphQL HTTP 接口（直连 Odoo）
+    # ----------------------
+    @http.route('/api/mcp/graphql', auth='public', type='json', methods=['POST'], csrf=False)
+    def graphql_http(self, server_id=None, **kwargs):
+        """执行 GraphQL 查询（需要 API Key 授权）。
+
+        请求体 JSON 示例：
+        {
+          "query": "query { models }",
+          "variables": {"key": "value"}
+        }
+        可选参数 server_id 用于凭据限定（与其他接口一致）。
+        """
+        try:
+            if not self._is_authorized(server_id=server_id):
+                return {'status': 'error', 'message': 'Unauthorized', 'code': 401}
+
+            body = {}
+            try:
+                # 新版 Odoo 提供 jsonrequest；若不可用则回退到原始数据解析
+                if hasattr(request, 'jsonrequest') and isinstance(request.jsonrequest, dict):
+                    body = request.jsonrequest
+                else:
+                    raw = request.httprequest.get_data(cache=False, as_text=True) or ''
+                    if raw:
+                        import json
+                        body = json.loads(raw)
+                # 兼容 JSON-RPC 包装：{"jsonrpc":"2.0","method":"call","params":{...}}
+                if isinstance(body, dict) and 'params' in body and isinstance(body['params'], dict):
+                    body = body['params']
+            except Exception:
+                body = {}
+
+            # 读取 query / variables，优先 JSON 体；若缺失则从查询字符串兜底
+            query = (body.get('query') if isinstance(body, dict) else '') or ''
+            variables = (body.get('variables') if isinstance(body, dict) else {}) or {}
+            if not query:
+                try:
+                    qs = request.httprequest.args  # ImmutableMultiDict
+                    if qs:
+                        query = qs.get('query') or query
+                        import json as _json
+                        vars_qs = qs.get('variables')
+                        if vars_qs and not variables:
+                            try:
+                                variables = _json.loads(vars_qs)
+                            except Exception:
+                                variables = {}
+                except Exception:
+                    pass
+            if not query:
+                return {'status': 'error', 'message': 'Missing query'}
+
+            # 延迟导入 schema
+            try:
+                from odoo.addons.mcp_server.services.graphql_schema import build_schema
+            except Exception as ie:
+                _logger.error("导入 GraphQL schema 失败: %s", ie)
+                return {'status': 'error', 'message': f'schema import failed: {ie}'}
+
+            schema = build_schema()
+            env = request.env
+            context_value = {'env': env}
+            result = schema.execute(query, variable_values=variables, context_value=context_value)
+
+            payload = {'status': 'success'}
+            if result.errors:
+                payload['status'] = 'error'
+                payload['errors'] = [str(e) for e in result.errors]
+            if result.data is not None:
+                payload['data'] = result.data
+            return payload
+        except Exception as e:
+            _logger.error("GraphQL HTTP 调用失败: %s", e)
+            return {'status': 'error', 'message': str(e)}
+
+    # 兼容：某些环境下请求被推断为 HTTP，增加同路径 HTTP 路由做兜底
+    @http.route('/api/mcp/graphql', auth='public', type='http', methods=['POST'], csrf=False)
+    def graphql_http_fallback(self, server_id=None, **kwargs):
+        try:
+            if not self._is_authorized(server_id=server_id):
+                return request.make_json_response({'status': 'error', 'message': 'Unauthorized', 'code': 401}, status=401)
+
+            # 读取原始请求体
+            body = {}
+            try:
+                raw = request.httprequest.get_data(cache=False, as_text=True) or ''
+                if raw:
+                    body = json.loads(raw)
+                if isinstance(body, dict) and 'params' in body and isinstance(body['params'], dict):
+                    body = body['params']
+            except Exception:
+                body = {}
+
+            query = (body.get('query') if isinstance(body, dict) else '') or ''
+            variables = (body.get('variables') if isinstance(body, dict) else {}) or {}
+            if not query:
+                # 查询字符串兜底
+                try:
+                    qs = request.httprequest.args
+                    if qs:
+                        query = qs.get('query') or query
+                        vars_qs = qs.get('variables')
+                        if vars_qs and not variables:
+                            try:
+                                variables = json.loads(vars_qs)
+                            except Exception:
+                                variables = {}
+                except Exception:
+                    pass
+            if not query:
+                return request.make_json_response({'status': 'error', 'message': 'Missing query'}, status=400)
+
+            try:
+                from odoo.addons.mcp_server.services.graphql_schema import build_schema
+            except Exception as ie:
+                _logger.error("导入 GraphQL schema 失败: %s", ie)
+                return request.make_json_response({'status': 'error', 'message': f'schema import failed: {ie}'}, status=500)
+
+            schema = build_schema()
+            env = request.env
+            context_value = {'env': env}
+            result = schema.execute(query, variable_values=variables, context_value=context_value)
+
+            payload = {'status': 'success'}
+            if result.errors:
+                payload['status'] = 'error'
+                payload['errors'] = [str(e) for e in result.errors]
+            if result.data is not None:
+                payload['data'] = result.data
+            return request.make_json_response(payload)
+        except Exception as e:
+            _logger.error("GraphQL HTTP 兜底路由失败: %s", e)
+            return request.make_json_response({'status': 'error', 'message': str(e)}, status=500)
+
+    # 显式 HTTP 路径，便于使用 curl 直接调用
+    @http.route('/api/mcp/graphql/http', auth='public', type='http', methods=['POST'], csrf=False)
+    def graphql_http_explicit(self, server_id=None, **kwargs):
+        return self.graphql_http_fallback(server_id=server_id, **kwargs)

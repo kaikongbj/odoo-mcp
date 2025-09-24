@@ -1,0 +1,40 @@
+{
+  "clientId": "5271b557-b557-51b55745c91-81b55745c9142fc-142fcc6a",
+  "currentIndex": 0,
+  "tabs": [
+    {
+      "name": "工具",
+      "icon": "icon-tool",
+      "type": "blank",
+      "componentIndex": 2,
+      "storage": {
+        "activeNames": [
+          0
+        ],
+        "autoDetectDiagram": {
+          "edges": [],
+          "views": []
+        },
+        "formData": {
+          "query": "query { odooRecords(model:\"res.partner\", domain:\"[]\", fields:[\"name\"], limit:3) }",
+          "variables": {}
+        },
+        "currentToolName": "graphql",
+        "lastToolCallResponse": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"data\":{\"odooRecords\":\"[{\\\"id\\\": 7, \\\"name\\\": \\\"AI Bot\\\"}, {\\\"id\\\": 3, \\\"name\\\": \\\"Administrator\\\"}, {\\\"id\\\": 1, \\\"name\\\": \\\"\\\\u5317\\\\u4eac\\\\u51ef\\\\u63a7\\\\u79d1\\\\u6280\\\\u6709\\\\u9650\\\\u516c\\\\u53f8\\\"}]\"}}"
+            }
+          ],
+          "structuredContent": {
+            "data": {
+              "odooRecords": "[{\"id\": 7, \"name\": \"AI Bot\"}, {\"id\": 3, \"name\": \"Administrator\"}, {\"id\": 1, \"name\": \"\\u5317\\u4eac\\u51ef\\u63a7\\u79d1\\u6280\\u6709\\u9650\\u516c\\u53f8\"}]"
+            }
+          },
+          "isError": false
+        }
+      }
+    }
+  ]
+}

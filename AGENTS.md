@@ -23,23 +23,23 @@ This document is maintained by AI agents to track the project status, tasks, and
 ## Activity Log
 
 - 2025年9月23日: 修复自动启动误判与增强健康检查：
-    - 健康检查判定“已运行”从仅依赖 listening 改为 listening 且 registered，避免在系统刚启动时出现“already active,
-      skipping”而实际未启动的情况
-    - start_server 的预检查与模块/模型级 auto-start 逻辑统一，若监听但未注册则警告端口冲突并跳过启动，避免重复占用
-    - 日志从“checking N server(s)”改为“starting N server(s)”，并在已运行路径中输出 listening/registered 细节
-    - 新增回归测试 tests/test_autostart.py 覆盖仅监听未注册的场景
+  - 健康检查判定“已运行”从仅依赖 listening 改为 listening 且 registered，避免在系统刚启动时出现“already active,
+    skipping”而实际未启动的情况
+  - start_server 的预检查与模块/模型级 auto-start 逻辑统一，若监听但未注册则警告端口冲突并跳过启动，避免重复占用
+  - 日志从“checking N server(s)”改为“starting N server(s)”，并在已运行路径中输出 listening/registered 细节
+  - 新增回归测试 tests/test_autostart.py 覆盖仅监听未注册的场景
 
 - 2025年9月23日: 模块升级至 1.1.0；新增健康检查能力：
-    - 服务侧新增 health_check 方法，基于端口探测确认监听状态
-    - 控制器新增 GET `/api/mcp/server/{id}/health` 路由（需要 API Key）
-    - 启动流程在获取到异步结果后执行健康检查，据此写回 state=active/inactive
-    - 启动路由返回包含 health 字段的结果，便于前端判断
-      建议：后续可增加主动 GraphQL/工具探测作为深度健康检查
+  - 服务侧新增 health_check 方法，基于端口探测确认监听状态
+  - 控制器新增 GET `/api/mcp/server/{id}/health` 路由（需要 API Key）
+  - 启动流程在获取到异步结果后执行健康检查，据此写回 state=active/inactive
+  - 启动路由返回包含 health 字段的结果，便于前端判断
+    建议：后续可增加主动 GraphQL/工具探测作为深度健康检查
 - 2025年9月23日: 生产服务器（192.168.1.100, Python 3.10.12）检测到 fastmcp==1.0、uvicorn==0.36.0、graphene 未安装；因不支持
   `streamable-http`，启动时报错 `Unknown transport: streamable-http` 与 `FastMCP.run unexpected keyword 'host'`
   ；已在服务代码中加入传输与绑定的双重回退：
-    - 若 `run(host/port)` 不支持则自动使用环境变量 `FASTMCP_HOST/PORT/BIND`
-    - 若 `streamable-http` 不支持则自动降级为 `sse`
+  - 若 `run(host/port)` 不支持则自动使用环境变量 `FASTMCP_HOST/PORT/BIND`
+  - 若 `streamable-http` 不支持则自动降级为 `sse`
       建议：将生产 fastmcp 升级至 >=2.9 并安装 graphene>=3.3 以启用 GraphQL 工具与 streamable-http。
 - 2025年9月23日: 修复生产环境报错（AttributeError: Environment.manage）：模块级 _register_hook 使用 Registry + cursor 创建
   Environment，去除 api.Environment.manage 依赖；仅保留模块级钩子以避免重复执行；为线程加上 advisory lock 保护与延时启动。

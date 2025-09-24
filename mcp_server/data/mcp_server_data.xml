@@ -7,7 +7,9 @@
             <field name="server_url">https://demo-mcp1.example.com</field>
             <field name="port">10888</field>
             <field name="api_key">demo_key_123456</field>
-            <field name="state">active</field>
+            <!-- 为避免与现有环境端口/记录冲突，演示数据保持为草稿且不激活 -->
+            <field name="state">draft</field>
+            <field name="active">0</field>
             <field name="note">这是一个演示MCP服务器，用于测试目的。</field>
         </record>
 
@@ -17,6 +19,7 @@
             <field name="port">10889</field>
             <field name="api_key">demo_key_abcdef</field>
             <field name="state">draft</field>
+            <field name="active">0</field>
             <field name="note">另一个演示MCP服务器，处于草稿状态。</field>
         </record>
 

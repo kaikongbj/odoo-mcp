@@ -118,7 +118,6 @@ class MCPServer(models.Model):
         return res
 
     name = fields.Char('服务器名称', required=True, tracking=True)
-    server_url = fields.Char('服务器URL', required=True, tracking=True)
     port = fields.Integer('端口', default=10888, tracking=True, help='FastMCP 服务端口，可以修改')
     api_key = fields.Char('API密钥', tracking=True)
     active = fields.Boolean('激活状态', default=True, tracking=True)
@@ -140,12 +139,6 @@ class MCPServer(models.Model):
     def _compute_resource_count(self):
         for record in self:
             record.resource_count = len(record.resource_ids)
-
-    @api.constrains('server_url')
-    def _check_server_url(self):
-        for record in self:
-            if not record.server_url.startswith(('http://', 'https://')):
-                raise ValidationError(_('服务器URL必须以http://或https://开头'))
 
     @api.constrains('port')
     def _check_port(self):

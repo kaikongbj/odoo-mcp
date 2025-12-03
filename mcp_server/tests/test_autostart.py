@@ -8,7 +8,6 @@ class TestAutoStartLogic(HttpCase):
         super().setUp()
         self.server = self.env['mcp.server'].sudo().create({
             'name': 'AutoStart Server',
-            'server_url': 'https://mcp.example.com',
             'api_key': 'auto-key-789',
             'state': 'inactive',
             'auto_start': True,

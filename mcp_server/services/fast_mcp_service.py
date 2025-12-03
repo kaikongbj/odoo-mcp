@@ -477,7 +477,6 @@ class FastMCPService:
         return {
             "id": server.id,
             "name": server.name,
-            "server_url": server.server_url,
             "state": server.state,
             "last_connection": server.last_connection.isoformat() if server.last_connection else None,
             "connection_count": server.connection_count,

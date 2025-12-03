@@ -11,7 +11,6 @@ class TestGraphQLForOdoo(HttpCase):
         # 创建一个测试用的 MCP 服务器记录用于 API Key 授权（任意 active 服务器即可）
         self.server = self.env['mcp.server'].sudo().create({
             'name': 'GraphQL Odoo Server',
-            'server_url': 'https://mcp.example.com',
             'api_key': 'gql-odoo-key-001',
             'state': 'active',
             'active': True,

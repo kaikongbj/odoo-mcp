@@ -14,7 +14,7 @@
                 <filter string="API" name="type_api" domain="[('resource_type', '=', 'api')]"/>
                 <filter string="其他" name="type_other" domain="[('resource_type', '=', 'other')]"/>
                 <filter string="已归档" name="inactive" domain="[('active', '=', False)]"/>
-                <group expand="0" string="分组">
+                <group>
                     <filter string="服务器" name="groupby_server" domain="[]" context="{'group_by': 'server_id'}"/>
                     <filter string="资源类型" name="groupby_type" domain="[]" context="{'group_by': 'resource_type'}"/>
                 </group>
@@ -125,7 +125,6 @@
                     </div>
                     <group>
                         <group>
-                            <field name="server_url" placeholder="例如: https://mcp-server.example.com"/>
                             <field name="port"/>
                             <field name="api_key" password="True"/>
                             <field name="auto_start"/>
@@ -164,7 +163,6 @@
                   decoration-info="state=='draft'" decoration-success="state=='active'">
                 <field name="active" invisible="1"/>
                 <field name="name"/>
-                <field name="server_url"/>
                 <field name="port"/>
                 <field name="auto_start"/>
                 <field name="state"/>
@@ -180,12 +178,11 @@
         <field name="arch" type="xml">
             <search string="MCP服务器">
                 <field name="name"/>
-                <field name="server_url"/>
                 <filter string="活动服务器" name="active_servers" domain="[('state', '=', 'active')]"/>
                 <filter string="草稿" name="draft_servers" domain="[('state', '=', 'draft')]"/>
                 <filter string="停用" name="inactive_servers" domain="[('state', '=', 'inactive')]"/>
                 <filter string="已归档" name="inactive" domain="[('active', '=', False)]"/>
-                <group expand="0" string="分组">
+                <group>
                     <filter string="状态" name="groupby_state" domain="[]" context="{'group_by': 'state'}"/>
                 </group>
             </search>

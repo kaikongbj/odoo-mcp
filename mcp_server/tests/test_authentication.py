@@ -11,7 +11,6 @@ class TestAPIAuthentication(HttpCase):
         # 创建一个测试用的 MCP 服务器记录
         self.server = self.env['mcp.server'].sudo().create({
             'name': 'Test MCP Server',
-            'server_url': 'https://mcp.example.com',
             'api_key': 'test-key-123',
             'state': 'active',
         })

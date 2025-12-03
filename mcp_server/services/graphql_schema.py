@@ -113,7 +113,6 @@ class MCPResourceType(graphene.ObjectType):
 class MCPServerType(graphene.ObjectType):
     id = graphene.Int()
     name = graphene.String()
-    server_url = graphene.String()
     port = graphene.Int()
     state = graphene.String()
     last_connection = graphene.DateTime()
@@ -228,7 +227,6 @@ class Query(graphene.ObjectType):
             out.append({
                 'id': s.id,
                 'name': s.name,
-                'server_url': s.server_url,
                 'port': s.port,
                 'state': s.state,
                 'last_connection': s.last_connection,
@@ -247,7 +245,6 @@ class Query(graphene.ObjectType):
         return {
             'id': s.id,
             'name': s.name,
-            'server_url': s.server_url,
             'port': s.port,
             'state': s.state,
             'last_connection': s.last_connection,

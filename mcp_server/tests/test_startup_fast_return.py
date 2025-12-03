@@ -10,7 +10,6 @@ class TestFastStartupReturn(HttpCase):
         super().setUp()
         self.server = self.env['mcp.server'].sudo().create({
             'name': 'Quick Start Server',
-            'server_url': 'https://mcp.example.com',
             'api_key': 'quick-key',
             'state': 'inactive',
             'active': True,

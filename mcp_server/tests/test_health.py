@@ -10,7 +10,6 @@ class TestHealthEndpoint(HttpCase):
         super().setUp()
         self.server = self.env['mcp.server'].sudo().create({
             'name': 'HealthCheck Server',
-            'server_url': 'https://mcp.example.com',
             'api_key': 'health-key-456',
             'state': 'active',
         })

@@ -95,7 +95,6 @@ class MCPServerController(http.Controller):
                 result.append({
                     'id': server.id,
                     'name': server.name,
-                    'server_url': server.server_url,
                     'port': server.port,
                     'state': server.state,
                     'last_connection': server.last_connection,
@@ -196,7 +195,6 @@ class MCPServerController(http.Controller):
                 'status': 'success',
                 'message': 'FastMCP服务器已就绪',
                 'server_name': server.name,
-                'server_url': server.server_url,
                 'port': server.port
             })
 

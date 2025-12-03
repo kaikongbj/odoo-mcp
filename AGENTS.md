@@ -23,9 +23,9 @@ This document is maintained by AI agents to track the project status, tasks, and
 ## Activity Log
 
 - 2025年9月27日: 修复 SafeDatabaseManager 中的 api.Environment.manage() 错误：
-    - 问题：在 fast_mcp_service.py 第29行使用了不存在的 `api.Environment.manage()` 方法
-    - 解决：移除 `api.Environment.manage()` 包装器，直接使用 registry + cursor 的正确 Odoo 模式
-    - 影响：修复了 MCP 工具执行时的 AttributeError，现在可以正常处理数据库操作
+  - 问题：在 fast_mcp_service.py 第29行使用了不存在的 `api.Environment.manage()` 方法
+  - 解决：移除 `api.Environment.manage()` 包装器，直接使用 registry + cursor 的正确 Odoo 模式
+  - 影响：修复了 MCP 工具执行时的 AttributeError，现在可以正常处理数据库操作
 - 2025年9月23日: 修复自动启动误判与增强健康检查：
   - 健康检查判定“已运行”从仅依赖 listening 改为 listening 且 registered，避免在系统刚启动时出现“already active,
     skipping”而实际未启动的情况

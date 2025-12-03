@@ -84,7 +84,7 @@ class MCPServerController(http.Controller):
             _logger.error('获取FastMCP服务实例失败: %s', str(e))
             return None
 
-    @http.route('/api/mcp/servers', auth='public', type='json', methods=['GET'], csrf=False)
+    @http.route('/api/mcp/servers', auth='public', type='jsonrpc', methods=['GET'], csrf=False)
     def get_servers(self, **kwargs):
         if not self._is_authorized():
             return {'status': 'error', 'message': 'Unauthorized', 'code': 401}
@@ -104,7 +104,7 @@ class MCPServerController(http.Controller):
             _logger.error("获取服务器列表失败: %s", str(e))
             return {'status': 'error', 'message': str(e)}
 
-    @http.route('/api/mcp/resources', auth='public', type='json', methods=['GET'], csrf=False)
+    @http.route('/api/mcp/resources', auth='public', type='jsonrpc', methods=['GET'], csrf=False)
     def get_resources(self, server_id=None, **kwargs):
         if not self._is_authorized(server_id=server_id):
             return {'status': 'error', 'message': 'Unauthorized', 'code': 401}
@@ -130,7 +130,7 @@ class MCPServerController(http.Controller):
             _logger.error("获取资源列表失败: %s", str(e))
             return {'status': 'error', 'message': str(e)}
 
-    @http.route('/api/mcp/resource/<int:resource_id>', auth='public', type='json', methods=['GET'], csrf=False)
+    @http.route('/api/mcp/resource/<int:resource_id>', auth='public', type='jsonrpc', methods=['GET'], csrf=False)
     def get_resource_content(self, resource_id, **kwargs):
         if not self._is_authorized():
             return {'status': 'error', 'message': 'Unauthorized', 'code': 401}
@@ -202,7 +202,7 @@ class MCPServerController(http.Controller):
             _logger.error("FastMCP代理请求失败: %s", str(e))
             return json.dumps({'status': 'error', 'message': str(e)})
 
-    @http.route('/api/mcp/server/<int:server_id>/start', auth='public', type='json', methods=['POST'], csrf=False)
+    @http.route('/api/mcp/server/<int:server_id>/start', auth='public', type='jsonrpc', methods=['POST'], csrf=False)
     def start_fastmcp_server(self, server_id, **kwargs):
         """启动FastMCP服务器"""
         try:
@@ -232,7 +232,7 @@ class MCPServerController(http.Controller):
             _logger.error("启动FastMCP服务器失败: %s", str(e))
             return {'status': 'error', 'message': str(e)}
 
-    @http.route('/api/mcp/server/<int:server_id>/stop', auth='public', type='json', methods=['POST'], csrf=False)
+    @http.route('/api/mcp/server/<int:server_id>/stop', auth='public', type='jsonrpc', methods=['POST'], csrf=False)
     def stop_fastmcp_server(self, server_id, **kwargs):
         """停止FastMCP服务器"""
         try:
@@ -258,7 +258,7 @@ class MCPServerController(http.Controller):
             _logger.error("停止FastMCP服务器失败: %s", str(e))
             return {'status': 'error', 'message': str(e)}
 
-    @http.route('/api/mcp/server/<int:server_id>/health', auth='public', type='json', methods=['GET'], csrf=False)
+    @http.route('/api/mcp/server/<int:server_id>/health', auth='public', type='jsonrpc', methods=['GET'], csrf=False)
     def server_health(self, server_id, **kwargs):
         """查询服务器健康状态"""
         try:
@@ -279,7 +279,7 @@ class MCPServerController(http.Controller):
     # ----------------------
     # GraphQL HTTP 接口（直连 Odoo）
     # ----------------------
-    @http.route('/api/mcp/graphql', auth='public', type='json', methods=['POST'], csrf=False)
+    @http.route('/api/mcp/graphql', auth='public', type='jsonrpc', methods=['POST'], csrf=False)
     def graphql_http(self, server_id=None, **kwargs):
         """执行 GraphQL 查询（需要 API Key 授权）。
 

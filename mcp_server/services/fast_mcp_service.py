@@ -8,9 +8,9 @@ import traceback
 from contextlib import contextmanager
 from typing import Any, Dict, Optional
 
-import odoo
 from fastmcp import FastMCP, Context
 from odoo import api, fields, SUPERUSER_ID
+from odoo.modules.registry import Registry
 
 _logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ class SafeDatabaseManager:
 
     @contextmanager
     def get_env(self):
-        registry = odoo.registry(self.db_name)
+        registry = Registry(self.db_name)
         with registry.cursor() as cr:
             env = api.Environment(cr, self.uid, dict(self.context))
             yield env

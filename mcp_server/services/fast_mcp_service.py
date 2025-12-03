@@ -2,15 +2,15 @@ import asyncio
 import logging
 import os
 import socket
-import time
 import threading
+import time
+import traceback
 from contextlib import contextmanager
 from typing import Any, Dict, Optional
 
 import odoo
-from odoo import api, fields, SUPERUSER_ID
-
 from fastmcp import FastMCP, Context
+from odoo import api, fields, SUPERUSER_ID
 
 _logger = logging.getLogger(__name__)
 
@@ -25,11 +25,10 @@ class SafeDatabaseManager:
 
     @contextmanager
     def get_env(self):
-        with api.Environment.manage():
-            registry = odoo.registry(self.db_name)
-            with registry.cursor() as cr:
-                env = api.Environment(cr, self.uid, dict(self.context))
-                yield env
+        registry = odoo.registry(self.db_name)
+        with registry.cursor() as cr:
+            env = api.Environment(cr, self.uid, dict(self.context))
+            yield env
 
     async def execute_with_env(self, operation, *args, **kwargs):
         """在独立的 Odoo 环境中执行一个同步 operation(operation 接收 env 作为第一个参数)。"""
@@ -514,15 +513,169 @@ class FastMCPService:
         - api_key 必填且与目标 mcp.server 记录的 api_key 一致
         - 服务器必须 active=True
         """
+        _logger.debug("🔐 开始授权检查: server_id=%s, token=%s", server_id,
+                      f"***{api_key[-4:]}" if api_key and len(api_key) > 4 else "None")
+        _logger.debug("🎫 认证令牌来源: %s", "serverAuthToken" if api_key else "无令牌")
+        
         if not api_key:
+            _logger.warning("授权失败: API Key 为空 (server_id=%s)", server_id)
             raise ValueError("Unauthorized")
+
+        # 查找服务器记录
         srv = env['mcp.server'].sudo().browse(server_id)
-        if not srv.exists() or not srv.active:
+        if not srv.exists():
+            _logger.warning("授权失败: 服务器记录不存在 (server_id=%s)", server_id)
             raise ValueError("Unauthorized")
+
+        if not srv.active:
+            _logger.warning("授权失败: 服务器未激活 (server_id=%s, name='%s')", server_id, srv.name)
+            raise ValueError("Unauthorized")
+
+        # 记录服务器信息（用于调试）
+        _logger.debug("找到服务器记录: id=%s, name='%s', active=%s", srv.id, srv.name, srv.active)
+        
         # 精确匹配该服务器的 api_key
-        if str(api_key) != str(srv.api_key or ''):
+        expected_key = str(srv.api_key or '')
+        provided_key = str(api_key)
+
+        if provided_key != expected_key:
+            _logger.warning("授权失败: API Key 不匹配 (server_id=%s, name='%s', provided=%s, expected=%s)",
+                            server_id, srv.name,
+                            f"***{provided_key[-4:]}" if len(provided_key) > 4 else provided_key,
+                            f"***{expected_key[-4:]}" if len(expected_key) > 4 else "empty")
             raise ValueError("Unauthorized")
+
+        _logger.info("授权成功: server_id=%s, name='%s'", server_id, srv.name)
         return True
+
+    def _log_client_connection_info(self, ctx: Optional[Context]) -> None:
+        """记录客户端连接信息，包括所有环境变量和上下文数据"""
+        if not ctx:
+            return
+
+        try:
+            _logger.info("=== 客户端连接信息开始 ===")
+            _logger.info("Context类型: %s", type(ctx).__name__)
+            _logger.info("Context对象: %s", ctx)
+
+            # 详细检查 Context 对象的所有属性
+            _logger.info("🔍 Context 对象完整属性检查:")
+            all_attrs = dir(ctx)
+            _logger.info("所有属性/方法: %s", [attr for attr in all_attrs if not attr.startswith('_')])
+
+            # 记录所有可用的上下文属性
+            available_attrs = []
+            all_checked_attrs = ("metadata", "meta", "env", "environment", "params", "client_info", "headers")
+            for attr in all_checked_attrs:
+                if hasattr(ctx, attr):
+                    attr_value = getattr(ctx, attr, None)
+                    if attr_value is not None:
+                        available_attrs.append(f"{attr}({type(attr_value).__name__})")
+                        _logger.info("属性 %s 存在且非空: %s", attr, type(attr_value).__name__)
+                    else:
+                        _logger.info("属性 %s 存在但为空", attr)
+                else:
+                    _logger.info("属性 %s 不存在", attr)
+
+            _logger.info("可用属性: %s", ", ".join(available_attrs) if available_attrs else "无")
+
+            # 尝试直接访问 Context 的字典内容（如果它是字典类型的）
+            if hasattr(ctx, '__dict__'):
+                _logger.info("Context.__dict__: %s", ctx.__dict__)
+            if hasattr(ctx, 'keys') and callable(getattr(ctx, 'keys')):
+                try:
+                    keys = ctx.keys()
+                    _logger.info("Context.keys(): %s", list(keys))
+                except Exception as e:
+                    _logger.info("Context.keys() 调用失败: %s", e)
+            if hasattr(ctx, 'items') and callable(getattr(ctx, 'items')):
+                try:
+                    items = ctx.items()
+                    _logger.info("Context.items(): %s", list(items))
+                except Exception as e:
+                    _logger.info("Context.items() 调用失败: %s", e)
+
+            # 详细记录环境变量
+            for attr_name in ("env", "environment"):
+                attr_value = getattr(ctx, attr_name, None)
+                if isinstance(attr_value, dict) and attr_value:
+                    _logger.info("--- %s 环境变量 ---", attr_name.upper())
+                    for key, value in sorted(attr_value.items()):
+                        # 敏感信息掩码处理
+                        if any(sensitive in key.lower() for sensitive in
+                               ['key', 'token', 'password', 'secret', 'auth']):
+                            masked_value = f"***{str(value)[-4:]}" if value and len(str(value)) > 4 else "***"
+                            _logger.info("  %s = %s [已掩码]", key, masked_value)
+                        else:
+                            _logger.info("  %s = %s", key, value)
+
+            # 专门检查 serverAuthToken 的存在情况
+            _logger.info("🔍 serverAuthToken 检查:")
+            serverauth_found = False
+
+            # 首先检查 HTTP Headers（主要方式）
+            headers = getattr(ctx, "headers", None)
+            if isinstance(headers, dict):
+                # 检查 Authorization Bearer token
+                auth_header = headers.get("Authorization") or headers.get("authorization")
+                if auth_header and str(auth_header).startswith("Bearer "):
+                    token = str(auth_header)[7:]
+                    masked_token = f"***{token[-4:]}" if len(token) > 4 else "***"
+                    _logger.info("  ✅ 在 HTTP Headers.Authorization 中找到 Bearer token: %s", masked_token)
+                    serverauth_found = True
+
+                # 检查自定义认证 headers
+                for header_name, header_value in headers.items():
+                    if any(token_hint in header_name.lower() for token_hint in ['token', 'auth', 'key']):
+                        if header_name.lower() not in ['authorization']:
+                            masked_token = f"***{str(header_value)[-4:]}" if len(str(header_value)) > 4 else "***"
+                            _logger.info("  ✅ 在 HTTP Headers.%s 中找到自定义认证令牌: %s", header_name, masked_token)
+                            serverauth_found = True
+
+            # 其次检查上下文属性
+            for attr_name in ("metadata", "meta", "params", "client_info"):
+                attr_value = getattr(ctx, attr_name, None)
+                if isinstance(attr_value, dict) and "serverAuthToken" in attr_value:
+                    token_value = attr_value["serverAuthToken"]
+                    masked_token = f"***{str(token_value)[-4:]}" if token_value and len(str(token_value)) > 4 else "***"
+                    _logger.info("  ✅ 在 %s 中找到 serverAuthToken: %s", attr_name, masked_token)
+                    serverauth_found = True
+
+            if not serverauth_found:
+                _logger.warning("  ❌ 未在 HTTP Headers 或上下文属性中找到 serverAuthToken")
+
+            # 记录其他上下文信息
+            for attr_name in ("metadata", "meta", "params", "client_info", "headers"):
+                attr_value = getattr(ctx, attr_name, None)
+                if isinstance(attr_value, dict) and attr_value:
+                    _logger.info("--- %s ---", attr_name.upper())
+                    for key, value in sorted(attr_value.items()):
+                        # 特别标记 Authorization header (Bearer token)
+                        if key.lower() == "authorization" and str(value).startswith("Bearer "):
+                            token = str(value)[7:]  # 移除 "Bearer " 前缀
+                            masked_value = f"Bearer ***{token[-4:]}" if len(token) > 4 else "Bearer ***"
+                            _logger.info("  🔐 %s = %s [HTTP Bearer Token]", key, masked_value)
+                        # 特别标记 serverAuthToken
+                        elif key == "serverAuthToken":
+                            masked_value = f"***{str(value)[-4:]}" if value and len(str(value)) > 4 else "***"
+                            _logger.info("  🔑 %s = %s [MCP标准认证]", key, masked_value)
+                        # 其他认证相关 headers
+                        elif attr_name == "headers" and any(
+                                token_hint in key.lower() for token_hint in ['token', 'auth', 'key']):
+                            masked_value = f"***{str(value)[-4:]}" if value and len(str(value)) > 4 else "***"
+                            _logger.info("  🎫 %s = %s [自定义认证Header]", key, masked_value)
+                        # 其他敏感信息掩码处理
+                        elif any(sensitive in key.lower() for sensitive in
+                                 ['key', 'token', 'password', 'secret', 'auth']):
+                            masked_value = f"***{str(value)[-4:]}" if value and len(str(value)) > 4 else "***"
+                            _logger.info("  %s = %s [已掩码]", key, masked_value)
+                        else:
+                            _logger.info("  %s = %s", key, value)
+
+            _logger.info("=== 客户端连接信息结束 ===")
+
+        except Exception as e:
+            _logger.debug("记录客户端连接信息时出错: %s", str(e))
 
     def _extract_api_key_from_ctx(self, ctx: Optional[Context]) -> Optional[str]:
         """仅从“客户端提供的 MCP 连接上下文”中提取 api_key。
@@ -533,46 +686,224 @@ class FastMCPService:
         - ctx.metadata / ctx.meta / ctx.env / ctx.environment / ctx.params / ctx.client_info / ctx.headers
         - 兼容 dict-like: ctx.get('api_key')
         """
+        _logger.info("🚀 开始从上下文提取API Key: ctx=%s", type(ctx).__name__ if ctx else "None")
+        
         if not ctx:
+            _logger.info("上下文为空，无API Key")
             return None
 
+        # 直接检查 Context 对象的基本信息
+        _logger.info("🔍 Context 对象基本信息: %s", ctx)
+        _logger.info("🔍 Context 对象类型: %s", type(ctx))
+        _logger.info("🔍 Context 对象模块: %s", getattr(type(ctx), '__module__', 'unknown'))
+
+        # 记录完整的客户端连接信息
+        self._log_client_connection_info(ctx)
+
+        _logger.info("📋 准备进入 serverAuthToken 提取逻辑")
         try:
-            for attr in ("metadata", "meta", "env", "environment", "params", "client_info", "headers"):
+            _logger.info("🔍 开始查找 serverAuthToken（MCP标准认证方式）")
+
+            # 通过 FastMCP Context 的 get_http_request 方法获取 HTTP 请求信息
+            headers = None
+            _logger.info("🌐 尝试通过 ctx.get_http_request() 获取 HTTP 请求信息")
+
+            try:
+                if hasattr(ctx, 'get_http_request'):
+                    http_request = ctx.get_http_request()
+                    _logger.info("✅ 获取到 HTTP 请求对象: %s (类型: %s)", http_request,
+                                 type(http_request).__name__ if http_request else "None")
+
+                    if http_request:
+                        # 检查 HTTP 请求对象的属性
+                        _logger.info("🔍 HTTP 请求对象属性: %s",
+                                     [attr for attr in dir(http_request) if not attr.startswith('_')])
+
+                        # 尝试获取 headers
+                        if hasattr(http_request, 'headers'):
+                            headers = http_request.headers
+                            _logger.info("✅ 从 HTTP 请求对象获取到 headers: %s (类型: %s)", headers,
+                                         type(headers).__name__)
+                        elif hasattr(http_request, 'get_headers'):
+                            headers = http_request.get_headers()
+                            _logger.info("✅ 通过 get_headers() 获取到 headers: %s (类型: %s)", headers,
+                                         type(headers).__name__)
+                        else:
+                            _logger.warning("❌ HTTP 请求对象没有 headers 属性")
+                else:
+                    _logger.warning("❌ Context 对象没有 get_http_request 方法")
+            except Exception as e:
+                _logger.error("❌ 调用 get_http_request() 时出错: %s", str(e))
+
+            # 如果还是没有获取到 headers，尝试传统方式
+            if not headers:
+                _logger.info("❌ 未通过 HTTP 请求获取到 headers，尝试传统属性访问")
+                # 尝试通过不同的属性名访问
+                for header_attr in ['headers', 'request_headers', 'http_headers', 'metadata']:
+                    alt_headers = getattr(ctx, header_attr, None)
+                    _logger.info("🔍 检查属性 %s: %s", header_attr, alt_headers)
+                    if alt_headers:
+                        _logger.info("✅ 在属性 %s 中找到数据: %s", header_attr, alt_headers)
+                        if isinstance(alt_headers, dict):
+                            headers = alt_headers
+                            break
+
+            # 处理不同类型的 headers 对象
+            headers_dict = None
+            if headers:
+                _logger.info("🌐 检查 headers 对象类型: %s", type(headers).__name__)
+
+                if isinstance(headers, dict):
+                    headers_dict = headers
+                    _logger.info("✅ headers 是字典类型: %s", list(headers.keys()))
+                elif hasattr(headers, 'items'):
+                    # 类似字典的对象
+                    try:
+                        headers_dict = dict(headers.items())
+                        _logger.info("✅ 将 headers 转换为字典: %s", list(headers_dict.keys()))
+                    except Exception as e:
+                        _logger.warning("❌ 无法转换 headers 为字典: %s", e)
+                elif hasattr(headers, '__getitem__'):
+                    # 可以通过索引访问的对象
+                    _logger.info("✅ headers 支持索引访问，尝试获取常见 header")
+                    headers_dict = {}
+                    for header_name in ['Authorization', 'authorization', 'Content-Type', 'User-Agent']:
+                        try:
+                            value = headers[header_name]
+                            if value:
+                                headers_dict[header_name] = value
+                        except (KeyError, TypeError):
+                            pass
+                    _logger.info("✅ 提取的 headers: %s", list(headers_dict.keys()))
+                else:
+                    _logger.warning("❌ 不支持的 headers 类型: %s", type(headers))
+
+            if headers_dict:
+                _logger.info("🌐 最终检查 HTTP Headers: %s", list(headers_dict.keys()))
+
+                # 检查 Authorization header (Bearer token)
+                auth_header = headers_dict.get("Authorization") or headers_dict.get("authorization")
+                _logger.info("🔒 检查 Authorization header: %s", "找到" if auth_header else "未找到")
+                if auth_header:
+                    _logger.info("🔒 Authorization header 内容: %s",
+                                 f"Bearer ***{str(auth_header)[-4:]}" if len(str(auth_header)) > 10 else "Bearer ***")
+                    if str(auth_header).startswith("Bearer "):
+                        token = str(auth_header)[7:]  # 移除 "Bearer " 前缀
+                        token_length = len(token)
+                        masked_token = f"***{token[-4:]}" if token_length > 4 else "***"
+                        _logger.info("✅ 从 Authorization Bearer header 中提取到 serverAuthToken: %s (长度: %d)",
+                                     masked_token, token_length)
+                        _logger.debug("🎯 serverAuthToken 认证成功，使用 HTTP Bearer token 方式")
+                        return token
+
+                # 检查其他可能的认证 headers（支持自定义 serverAuthTokenHeader）
+                for header_name, header_value in headers_dict.items():
+                    if any(token_hint in header_name.lower() for token_hint in ['token', 'auth', 'key']):
+                        if header_name.lower() not in ['authorization']:  # 避免重复处理
+                            token_length = len(str(header_value))
+                            masked_token = f"***{str(header_value)[-4:]}" if token_length > 4 else "***"
+                            _logger.info("✅ 从自定义认证 header '%s' 中找到令牌: %s (长度: %d)",
+                                         header_name, masked_token, token_length)
+                            _logger.debug("🎯 使用自定义 serverAuthToken header: %s", header_name)
+                            return str(header_value)
+            else:
+                _logger.info("❌ 未能获取到有效的 HTTP headers")
+
+            # 其次检查上下文属性（备用方式）
+            _logger.debug("🔍 在上下文属性中查找 serverAuthToken（备用方式）")
+            for attr in ("metadata", "meta", "params", "client_info"):
+                d = getattr(ctx, attr, None)
+                _logger.debug("🔎 检查上下文属性 %s: %s", attr, type(d).__name__ if d else "None")
+                if isinstance(d, dict):
+                    _logger.debug("📋 属性 %s 包含的键: %s", attr, list(d.keys()))
+
+                    # 详细记录 serverAuthToken 查找过程
+                    _logger.debug("🔑 在 %s 中搜索 serverAuthToken", attr)
+                    server_auth_token = d.get("serverAuthToken")
+
+                    if server_auth_token:
+                        token_length = len(str(server_auth_token))
+                        masked_token = f"***{str(server_auth_token)[-4:]}" if token_length > 4 else "***"
+                        _logger.info("✅ 在 %s.serverAuthToken 中找到认证令牌: %s (长度: %d)",
+                                     attr, masked_token, token_length)
+                        _logger.debug("🎯 serverAuthToken 认证成功，使用上下文属性方式")
+                        return str(server_auth_token)
+                    else:
+                        _logger.debug("❌ 在 %s 中未找到 serverAuthToken", attr)
+                else:
+                    _logger.debug("⚠️  属性 %s 不是字典类型，跳过", attr)
+
+            _logger.warning("⚠️  未在 HTTP Headers 或上下文属性中找到 serverAuthToken，将尝试后备认证方式")
+
+            # 环境变量不应该用于认证，但记录它们用于调试
+            for attr in ("env", "environment"):
+                d = getattr(ctx, attr, None)
+                if isinstance(d, dict) and d:
+                    _logger.debug("检查环境变量属性 %s (不用于认证): %s", attr, list(d.keys()))
+                    # 警告：不从环境变量中提取认证信息
+                    if any(key.lower() in ["api_key", "mcp_api_key", "token"] for key in d.keys()):
+                        _logger.warning("⚠️  在环境变量中发现认证相关字段，但不会用于认证。请使用 serverAuthToken")
+
+            # 作为后备，检查其他可能的认证字段（但记录警告）
+            for attr in ("metadata", "meta", "params", "client_info", "headers"):
                 d = getattr(ctx, attr, None)
                 if isinstance(d, dict):
-                    # 支持常见小写与大写键名（客户端可能把环境变量透传为大写键）
-                    for k in (
-                        "api_key", "mcp_api_key", "apikey", "token",
-                        "MCP_API_KEY", "FASTMCP_API_KEY", "API_KEY",
-                    ):
+                    for k in ("api_key", "mcp_api_key", "apikey", "token"):
                         v = d.get(k)
                         if v:
+                            _logger.warning("⚠️  在 %s.%s 中找到认证信息，建议使用 serverAuthToken: %s",
+                                            attr, k, f"***{str(v)[-4:]}" if len(str(v)) > 4 else str(v))
                             return str(v)
-        except Exception:
-            pass
+
+        except Exception as e:
+            _logger.error("❌ 从上下文提取认证令牌时出错: %s", str(e))
+            _logger.error("异常详情: %s", traceback.format_exc())
 
         try:
             if hasattr(ctx, "get"):
                 v = ctx.get("api_key")
                 if v:
+                    _logger.debug("从ctx.get('api_key')找到API Key: %s",
+                                  f"***{str(v)[-4:]}" if len(str(v)) > 4 else str(v))
                     return str(v)
-        except Exception:
-            pass
+                else:
+                    _logger.debug("ctx.get('api_key') 返回空值")
+        except Exception as e:
+            _logger.debug("从ctx.get()提取API Key时出错: %s", str(e))
 
+        _logger.debug("未能从上下文中提取到API Key")
         return None
 
     async def _ensure_authorized_ctx(self, ctx: Optional[Context], server_id: int) -> bool:
-        """统一授权入口：从 ctx 中提取 api_key 并校验"""
+        """统一授权入口：从 ctx 中提取 serverAuthToken 并校验"""
+        _logger.debug("🚀 开始统一授权检查: server_id=%s", server_id)
+        _logger.debug("🔍 准备从上下文提取 serverAuthToken")
+        
         try:
             key = self._extract_api_key_from_ctx(ctx)
+            if key:
+                _logger.debug("✅ 成功提取到认证令牌: %s", f"***{key[-4:]}" if len(key) > 4 else "***")
+                _logger.debug("🔐 准备验证 serverAuthToken 与服务器配置")
+            else:
+                _logger.warning("❌ 未能提取到有效的 serverAuthToken")
+            
             ok = await self._safe_execute_with_env(self._authorize_api_key_impl, key, server_id)
-            return bool(ok)
-        except Exception:
+            auth_result = bool(ok)
+            if auth_result:
+                _logger.info("🎉 serverAuthToken 授权检查成功: server_id=%s", server_id)
+            else:
+                _logger.error("💥 serverAuthToken 授权检查失败: server_id=%s", server_id)
+            return auth_result
+        except Exception as e:
+            _logger.error("授权检查异常: %s", str(e))
+            _logger.debug("授权检查异常详情: %s", traceback.format_exc())
+            
             if ctx:
                 try:
                     await ctx.error("Unauthorized")
-                except Exception:
-                    pass
+                except Exception as ctx_err:
+                    _logger.debug("发送错误消息到上下文失败: %s", str(ctx_err))
+            
             return False
 
     async def _graphql_impl(self, server_id: int, query: str, variables: Optional[Dict[str, Any]], ctx: Optional[Context]) -> Dict[str, Any]:
@@ -954,36 +1285,37 @@ class FastMCPService:
 
             # 尝试获取后台任务的初始状态，设置较长超时确保得到结果
             try:
-                result = future.result(timeout=5.0)  # 增加超时时间到5秒
+                result = future.result(timeout=5.0)
                 _logger.info("服务器启动任务结果: %s", result)
-
-                # 如果异步启动成功，在主线程中更新服务器状态
-                if result.get('success', False):
-                    # 二次健康检查确认端口是否监听
-                    health = self.health_check(server_record)
-                    ready = health.get('status') == 'success' and health.get('data', {}).get('listening', False)
-                    server_record.sudo().write({
-                        'state': 'active' if ready else 'inactive',
-                        'last_connection': fields.Datetime.now()
-                    })
-                    if not ready:
-                        _logger.warning("FastMCP启动后健康检查未通过: %s", health)
-                    return ready
-                else:
-                    _logger.error("异步启动失败: %s", result.get('error', '未知错误'))
-                    return False
             except asyncio.TimeoutError:
-                _logger.info("服务器启动任务已提交，在后台运行但超时未等到结果")
-                # 尝试健康检查判断是否已就绪
-                health = self.health_check(server_record)
-                ready = health.get('status') == 'success' and health.get('data', {}).get('listening', False)
-                server_record.sudo().write({
-                    'state': 'active' if ready else 'inactive',
-                    'last_connection': fields.Datetime.now()
-                })
-                return ready
+                _logger.info("启动协程未在超时时间内完成，进行健康回退检测")
+                result = {'success': False, 'error': 'timeout'}
+            except asyncio.CancelledError as ce:  # type: ignore
+                _logger.warning("启动协程被取消: %s，执行健康回退检测", ce)
+                result = {'success': False, 'error': 'cancelled'}
             except Exception as inner_e:
-                _logger.warning("获取服务器启动状态时出现警告: %s", str(inner_e))
+                _logger.warning("获取服务器启动状态时出现警告: %s，执行健康回退检测", inner_e)
+                result = {'success': False, 'error': str(inner_e) or 'unknown'}
+
+            # 统一健康回退：
+            # 即使协程报告失败/超时，也以实时健康检查（端口监听）为准，避免“实际已启动但 future 超时”导致的误报。
+            health = self.health_check(server_record)
+            data_h = health.get('data', {}) if isinstance(health, dict) else {}
+            ready = (
+                    isinstance(health, dict)
+                    and health.get('status') == 'success'
+                    and bool(data_h.get('listening'))
+            )
+            server_record.sudo().write({
+                'state': 'active' if ready else 'inactive',
+                'last_connection': fields.Datetime.now()
+            })
+            if ready:
+                if not result.get('success'):
+                    _logger.info("协程结果非 success 但健康检查通过，视为启动成功 (fallback path)")
+                return True
+            else:
+                _logger.error("FastMCP 启动失败：result=%s health=%s", result, health)
                 return False
         except Exception as e:
             _logger.error("启动FastMCP服务器失败: %s", str(e))
@@ -992,7 +1324,13 @@ class FastMCPService:
             return False
 
     async def _start_server_async(self, mcp_server, server_record):
-        """异步启动MCP服务器"""
+        """异步启动MCP服务器（精简阻塞：端口监听后立即返回）。
+
+        设计要点：
+        - 仅负责触发底层线程 + 轮询端口监听；不等待完整“协议预热”流程。
+        - 端口监听成功即返回 {'success': True}；后续预热在后台协程中异步执行。
+        - 防止长时间 sleep 触发上层 future.result 超时，导致误判失败。
+        """
         try:
             # 在异步函数开始时保存必要的信息，而不使用server_record对象
             server_id = server_record.id
@@ -1106,54 +1444,47 @@ class FastMCPService:
             server_thread.start()
             _logger.info("FastMCP服务器线程已启动")
 
-            # 给服务器一些时间启动并绑定端口
-            await asyncio.sleep(3.0)  # 增加到3秒让服务器完全初始化
-
-            # 检查端口是否被绑定，作为服务器启动的指示
+            # 轮询端口（最短 0.5s，最长 ~5s）：一旦监听成功立即返回，不等待协议预热
             startup_successful = False
-            for attempt in range(15):  # 增加到15次检查，总共7.5秒超时
+            for attempt in range(10):  # 10 * 0.5s = 5s
                 try:
                     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                    result = sock.connect_ex((host, port))
+                    res = sock.connect_ex((host, port))
                     sock.close()
-                    if result == 0:
-                        _logger.info("FastMCP服务器已成功绑定端口，启动完成")
+                    if res == 0:
+                        _logger.info("FastMCP服务器已成功绑定端口 (attempt %d)", attempt + 1)
                         startup_successful = True
                         break
-                except Exception as e:
-                    _logger.debug("端口检查异常: %s", str(e))
-                    pass
+                except Exception as ce:
+                    _logger.debug("端口检查异常: %s", ce)
+                await asyncio.sleep(0.5)
 
-                await asyncio.sleep(0.5)  # 每次检查间隔0.5秒
-
-            # 额外等待，确保MCP协议初始化完成
-            if startup_successful:
-                _logger.info("端口绑定成功，等待MCP协议初始化完成...")
-                await asyncio.sleep(3.0)  # 增加到3秒确保MCP协议完全准备好
-
-                # 添加预热机制 - 确保服务器真正准备好
-                _logger.info("开始MCP服务器预热检查...")
-                for warmup_attempt in range(5):
-                    try:
-                        await asyncio.sleep(1.0)  # 每次预热检查间隔1秒
-                        _logger.info("预热检查 %d/5", warmup_attempt + 1)
-                    except Exception as e:
-                        _logger.debug("预热检查异常: %s", str(e))
-
-                _logger.info("MCP服务器预热完成，服务器已准备好接受连接")
-
-            if not startup_successful:
-                _logger.warning("无法确认FastMCP服务器是否成功启动（端口检测失败）")
-
-            # 检查是否有启动错误
             if server_error[0]:
                 _logger.error("启动FastMCP服务器出错: %s", server_error[0])
                 return {'success': False, 'error': server_error[0]}
 
-            _logger.info("FastMCP服务器已在 %s:%s 启动", host, port)
+            if not startup_successful:
+                _logger.warning("端口在预期时间内未确认监听，返回失败")
+                return {'success': False, 'error': 'port-not-listening'}
 
-            # 在主线程中更新服务器状态，避免使用异步函数中的已关闭游标
-            # 我们将该操作移至异步函数外部处理
+            # 异步启动预热任务（不阻塞返回）
+            async def _warmup():
+                try:
+                    _logger.info("[Warmup] 开始协议与资源预热 ...")
+                    # 轻量再探测几次，给外部日志提示
+                    for i in range(3):
+                        await asyncio.sleep(1.0)
+                        _logger.debug("[Warmup] tick %d", i + 1)
+                    _logger.info("[Warmup] 完成")
+                except Exception as we:
+                    _logger.debug("[Warmup] 异常: %s", we)
+
+            try:
+                self.event_loop.call_soon_threadsafe(
+                    lambda: asyncio.run_coroutine_threadsafe(_warmup(), self.event_loop))
+            except Exception:
+                pass
+
             return {'success': True, 'server_id': server_id}
         except Exception as e:
             _logger.error("异步启动FastMCP服务器失败: %s", str(e))

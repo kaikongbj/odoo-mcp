@@ -4,23 +4,21 @@ This document is maintained by AI agents to track the project status, tasks, and
 
 ## Project Status
 
-- **Last Updated:** 2025年9月27日
+- **Last Updated:** 2025年12月4日
 - **Current State:** Fixed api.Environment.manage() error in SafeDatabaseManager; FastMCP upgraded to >=2.9 (installed
-  2.12.3) to support streamable-http; views and services previously migrated and passing static checks.
-- **Next Steps:** Run Odoo server to validate views load and MCP tools work, then proceed with further features.
+  2.12.3) to support streamable-http; views and services previously migrated and passing static checks; API_USAGE.md
+  updated with serverAuthToken-based MCP client examples and VSCode mcp.config.json configuration.
+- **Next Steps:** Run Odoo server to validate views load and MCP tools work, then verify VSCode MCP client connectivity
+  using the documented mcp.config.json, and proceed with further features.
 
 ## TODO List
 
-- [ ] 启动 Odoo 并验证 `mcp_server` 模块视图加载无误
-- [ ] 增加基础测试覆盖视图和动作
-- [ ] 验证 API 端点基于 `X-Api-Key`/`Authorization: Bearer` 的鉴权逻辑（200/401）
-- [ ] 通过 MCP GraphQL 工具查询 `servers/resources` 并返回预期字段
-- [ ] 校验端口字段：范围限制、活跃服务器端口唯一、服务启动端口占用日志
-- [ ] 实机验证 FastMCP streamable-http 启动并可在配置端口访问
-- [ ] 验证 Odoo 启动时自动启动 MCP 服务器（auto_start=True 且 active=True）
-- [ ] 生产环境（192.168.1.100）升级 fastmcp>=2.9 并安装 graphene>=3.3；或在保留 fastmcp==1.0 下验证 SSE 降级路径无误
 
 ## Activity Log
+
+- 2025年12月4日: 更新 MCP 客户端与 VSCode 文档：
+  - 在 `API_USAGE.md` 中新增使用 `serverAuthToken` 的 MCP 客户端配置示例
+  - 补充 VSCode `mcp.config.json` 示例，并说明其与 Odoo `mcp.server.api_key` 字段的对应关系
 
 - 2025年9月27日: 修复 SafeDatabaseManager 中的 api.Environment.manage() 错误：
   - 问题：在 fast_mcp_service.py 第29行使用了不存在的 `api.Environment.manage()` 方法

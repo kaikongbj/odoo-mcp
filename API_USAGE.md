@@ -1,6 +1,6 @@
 # MCP 服务器 API 使用文档
 
-本文档面向开发者与自动化脚本，系统性介绍 MCP 模块在 Odoo 中提供的 HTTP/JSON 接口与 GraphQL 能力，涵盖认证、端点说明、请求示例（PowerShell/curl）、以及常见问题与排错建议。
+本文档面向开发者与自动化脚本，系统性介绍 MCP 模块在 Odoo 中提供的 HTTP/JSON 接口与 MCP 工具能力，涵盖认证、端点说明、请求示例（PowerShell/curl）、以及常见问题与排错建议。
 
 ## 0. 基础说明
 
@@ -82,65 +82,8 @@ ssh 192.168.1.100 "curl -s 'http://127.0.0.1:8069/api/mcp/server/1/health?db=<DB
 
 ## 2) GraphQL（直连 Odoo 数据）
 
-GraphQL 接口暴露于两个路由，功能一致：
-
-- JSON 首选：`POST /api/mcp/graphql`
-- HTTP 兜底（便于某些代理/客户端）：`POST /api/mcp/graphql/http`
-
-两者请求体统一为 JSON，字段：
-
-- `api_key`: 授权所需的密钥（必填）
-- `query`: GraphQL 查询/变更字符串
-- `variables`: 变量对象（可选）
-
-示例 Header：
-
-- `Content-Type: application/json`
-
-注意：
-
-- 若客户端按 JSON-RPC 发送包裹体（`{"jsonrpc":"2.0","params":{...}}`），也会被兼容解析。
-- 可通过查询串传入 `?db=<数据库>` 选择数据库。
-
-### 2.1 入门：查询模型列表
-
-```pwsh
-ssh 192.168.1.100 "curl -s -X POST \
-  -H 'Content-Type: application/json' \
-  --data '{"api_key":"<YOUR_API_KEY>","query":"query { models }"}' \
-  'http://127.0.0.1:8069/api/mcp/graphql?db=<DB>'"
-```
-
-返回示例（节选）：
-
-```json
-{
-  "status": "success",
-  "data": { "models": ["res.partner", "sale.order", "mcp.server", "..." ] }
-}
-```
-
-### 2.2 读取记录列表（fields/domain/分页/排序）
-
-Query：
-
-```graphql
-query {
-  odooRecords(
-    model: "res.partner",
-    domain: "[]",
-    fields: ["name", "email", "parent_id"],
-    limit: 5,
-    offset: 0,
-    order: "name asc"
-  )
-}
-```
-
-说明：
-
-- domain 传入 JSON 字符串；如不确定可传 "[]"（空条件）
-- many2one 字段会被规范化为 `{"id": 1, "name": "..."}`
+> GraphQL 功能已在 v1.1+ 之后移除，当前版本不再提供 `/api/mcp/graphql*` 路由或任何 GraphQL 工具。  
+> 如在旧文档或脚本中仍看到 GraphQL 示例，请改用 MCP 工具或 REST 接口访问 Odoo 数据。
 
 ---
 
@@ -214,24 +157,24 @@ const headers = {
 - `list_resources()`
 - `get_resource_content(resource_uri: string)`
 
-**GraphQL 工具**：
-
-- `graphql(query: string, variables?: object)`
-
 ---
 
 ## 4) MCP 客户端配置示例（更新）
 
-### 4.1 使用 serverAuthToken（推荐）
+### 4.1 使用 Authorization Header（推荐）
 
-**标准配置**：
+在 MCP JSON 标准中，并没有名为 `serverAuthToken` 的字段；令牌值通过 HTTP 头传递。下面示例中，我们仍把这个令牌值称为 `serverAuthToken`，但它只是一个值，而不是 JSON 字段名。
+
+**标准配置（远程 HTTP 服务器）**：
 ```json
 {
   "mcpServers": {
     "odoo-mcp": {
       "url": "http://127.0.0.1:10888",
-      "transport": "streamable-http",
-      "serverAuthToken": "your-mcp-server-api-key"
+      "headers": {
+        "Authorization": "Bearer your-mcp-server-api-key"
+      },
+      "disabled": false
     }
   }
 }
@@ -256,11 +199,11 @@ const mcpConfig = {
 
 ### 4.3 认证配置说明
 
-**✅ 新方式（serverAuthToken）**：
+**✅ 新方式（基于 Authorization Header 的 serverAuthToken）**：
 
-- 通过 `serverAuthToken` 字段配置
-- 自动使用 `Authorization: Bearer` header
-- 符合 MCP 标准，更安全
+- 在 MCP JSON 中通过 `headers.Authorization: "Bearer <token>"` 传递认证令牌（`<token>` 即本文称的 `serverAuthToken`）
+- 客户端请求中使用 `Authorization: Bearer <token>`（或自定义 header，例如 `X-API-Key`）
+- 服务器端从 HTTP headers 提取该令牌，并与 `mcp.server` 记录中的 `api_key` 字段匹配
 
 **⚠️ 过时方式（不推荐）**：
 
@@ -282,15 +225,37 @@ const mcpConfig = {
   "mcpServers": {
     "odoo-mcp": {
       "url": "http://127.0.0.1:10888",
-      "transport": "streamable-http",
-      "serverAuthToken": "aaa123",
-      "disabled": false,
-      "description": "Odoo ERP MCP 服务器",
-      "timeout": 30
+      "headers": {
+        "Authorization": "Bearer aaa123"
+      },
+      "disabled": false
     }
   }
 }
 ```
+
+### 4.5 在 VSCode 中使用（示例）
+
+在 VSCode 中使用 MCP 扩展或 OpenMCP 客户端时，可以复用上面的 `mcpServers` 配置结构。典型做法是在工作区根目录或插件指定的配置路径下创建一个 `mcp.config.json` 文件（**具体保存位置以 VSCode MCP 插件文档为准**）：
+
+```json
+{
+  "mcpServers": {
+    "odoo-mcp": {
+      "url": "http://127.0.0.1:10888",
+      "headers": {
+        "Authorization": "Bearer your-mcp-server-api-key"
+      }
+    }
+  }
+}
+```
+
+说明：
+
+- Authorization 头中的令牌值（本文称为 `serverAuthToken`）必须等于 Odoo 中对应 `mcp.server` 记录上的 `api_key` 字段。
+- VSCode 侧会自动使用 `Authorization: Bearer <serverAuthToken>` 形式把该值作为认证令牌发送到 MCP 服务器。
+- 如需降级为 `sse` 传输，只需在服务器启动参数中将传输类型改为 `"sse"`（客户端 JSON 不需要 `transport` 字段）。
 
 ---
 
@@ -315,8 +280,15 @@ const mcpConfig = {
 1. **更新客户端配置**：
    ```json
    {
-     "serverAuthToken": "your-api-key"  // 新增
-     // 删除或注释旧的 env/metadata 配置
+     "mcpServers": {
+       "odoo-mcp": {
+         "url": "http://127.0.0.1:10888",
+         "headers": {
+           "Authorization": "Bearer your-api-key"
+         }
+         // 删除或注释旧的 env/metadata 配置
+       }
+     }
    }
    ```
 
@@ -390,9 +362,8 @@ tail -f /var/log/odoo/odoo.log | grep "serverAuthToken"
 
 - **🔌 标准 MCP 协议支持** - 符合 MCP 规范的工具调用
 - **🔐 安全认证机制** - serverAuthToken 标准认证
-- **📊 GraphQL 数据访问** - 灵活的 Odoo 数据查询和变更
 - **🚀 REST API 接口** - 用于调试和直接集成
-- **💡 丰富的调试信息** - 详细的日志和错误提示
+- **💡 丰富的调试信息** - 详细的调试信息和错误提示
 
 **快速开始**：
 

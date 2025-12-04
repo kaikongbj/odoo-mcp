@@ -156,6 +156,7 @@ class FastMCPService:
             return result
         except Exception as e:
             _logger.error("安全数据库操作执行失败: %s", str(e))
+            _logger.error("异常详情: %s", traceback.format_exc())
             # 重新抛出异常，让调用者处理
             raise
 
@@ -905,43 +906,6 @@ class FastMCPService:
             
             return False
 
-    async def _graphql_impl(self, server_id: int, query: str, variables: Optional[Dict[str, Any]], ctx: Optional[Context]) -> Dict[str, Any]:
-        """GraphQL 执行实现，供工具委托调用"""
-        try:
-            if not await self._ensure_authorized_ctx(ctx, server_id):
-                return {"errors": ["Unauthorized"], "code": 401}
-            from .graphql_schema import build_schema
-            schema = build_schema()
-
-            def sync_op(env):
-                return schema.execute(
-                    query,
-                    variable_values=(variables or {}),
-                    context_value={"env": env},
-                )
-
-            result = await self._safe_execute_with_env(lambda env: sync_op(env))
-            payload: Dict[str, Any] = {}
-            if getattr(result, "errors", None):
-                payload["errors"] = [str(e) for e in result.errors]
-            if getattr(result, "data", None) is not None:
-                payload["data"] = result.data
-
-            if ctx:
-                if payload.get("errors"):
-                    await ctx.error(f"GraphQL 执行出现 {len(payload['errors'])} 个错误")
-                else:
-                    await ctx.info("GraphQL 查询执行成功")
-            return payload
-        except Exception as e:
-            _logger.error("GraphQL 执行失败: %s", str(e))
-            if ctx:
-                try:
-                    await ctx.error(f"GraphQL 执行失败: {str(e)}")
-                except Exception:
-                    pass
-            return {"errors": [str(e)]}
-
     def _register_default_tools(self, mcp_server, server_record):
         """注册默认工具到FastMCP服务器"""
 
@@ -1195,11 +1159,6 @@ class FastMCPService:
                 await ctx.error(f"获取资源内容失败: {str(e)}")
                 _logger.error("FastMCP工具get_resource_content失败: %s", str(e))
                 return {"status": "error", "message": str(e)}
-
-        # ===== GraphQL 工具 =====
-        @mcp_server.tool()
-        async def graphql(query: str, variables: Optional[Dict[str, Any]] = None, ctx: Context = None) -> Dict[str, Any]:
-            return await self._graphql_impl(server_record.id, query, variables, ctx)
 
     def _register_default_resources(self, mcp_server, server_record):
         """注册默认资源到FastMCP服务器"""

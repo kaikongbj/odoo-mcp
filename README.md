@@ -2,7 +2,7 @@
 
 ## 项目概述
 
-MCP服务器模块是一个基于Odoo 18和Python
+MCP服务器模块是一个基于Odoo 19和Python
 3.10开发的模块，用于管理和提供MCP（模型上下文协议）服务。该模块集成了FastMCP框架，可以方便地创建、管理和与大型语言模型(LLM)
 交互的MCP服务器。
 
@@ -104,10 +104,10 @@ mcp_server/
     - 填写服务器名称、URL和其他必要信息
     - 保存服务器记录
 
-2. **激活服务器**
-    - 在服务器表单页面，点击"激活"按钮
-    - 系统将启动FastMCP服务器实例
-    - 服务器状态将变为"活动"
+2. **启动/停止服务器**
+    - 在服务器表单页面，点击"启动服务器"按钮
+    - 系统将启动FastMCP服务器实例，服务器状态变为"活动"
+    - 如需停止，在同一位置点击"停止服务器"按钮
 
 3. **创建资源**
     - 导航到MCP服务器 > 资源菜单
@@ -127,7 +127,7 @@ MCP服务器模块提供以下API接口：
 1. **获取服务器列表**
     - URL: `/api/mcp/servers`
     - 方法: GET
-    - 认证: API密钥
+    - 认证: API密钥（通过 `api_key` 参数，支持 Query 或 JSON 体，详见 `API_USAGE.md`）
     - 返回: 服务器列表JSON
 
 2. **获取资源列表**
@@ -164,8 +164,12 @@ MCP服务器模块提供以下API接口：
 7. **健康检查**
     - URL: `/api/mcp/server/{id}/health`
     - 方法: GET
-    - 认证: API密钥
-    - 返回: `status` 与 `data.listening` 指示监听状态
+    - 认证: API密钥（通过 `api_key` 参数）
+    - 返回: JSON，通常包括：
+        - `status`: `success` 或 `error`
+        - `listening`: 布尔值，指示端口是否在监听
+        - `registered`: 布尔值，指示服务是否完成注册
+        - 以及可能的错误信息字段（具体结构以 `API_USAGE.md` 为准）
 
 ### FastMCP使用
 
@@ -178,6 +182,69 @@ FastMCP框架允许您注册工具和资源，以供大型语言模型(LLM)使�
 **资源示例**:
 
 要创建资源，请在 `services/fast_mcp_service.py` 中使用 `@mcp_server.resource()` 装饰器定义一个函数。
+
+### MCP 客户端配置示例
+
+MCP 客户端（例如 VSCode MCP 插件、OpenMCP 客户端等）需要通过 HTTP Header 携带认证令牌，与本模块中的 `mcp.server.api_key` 一一对应。
+
+- **REST API**：通过 URL 查询参数或 JSON 请求体中的 `api_key` 字段进行认证（不使用 Header）。
+- **MCP 工具调用**：通过 HTTP Header 携带令牌（推荐 `Authorization: Bearer <token>`）。
+
+#### 标准 MCP JSON 配置
+
+下面是一个典型的 MCP JSON 配置片段（例如 `mcp.config.json` 或其他 MCP 客户端配置文件中），用于连接本模块启动的 FastMCP 服务器（默认端口 `10888`）：
+
+```json
+{
+  "mcpServers": {
+    "odoo-mcp": {
+      "url": "http://127.0.0.1:10888/mcp",
+      "headers": {
+        "Authorization": "Bearer your-mcp-server-api-key"
+      },
+      "disabled": false
+    }
+  }
+}
+```
+
+说明：
+
+- **`your-mcp-server-api-key`** 必须与 Odoo 中对应 `mcp.server` 记录上的 `API 密钥 (api_key)` 字段保持一致。
+- 客户端会自动以 `Authorization: Bearer <token>` 的形式把该值发送到 FastMCP 服务器，服务端再与 `mcp.server.api_key` 进行匹配。
+- 如需自定义 Header 名称（例如 `X-API-Key`），可以在客户端侧改为：
+
+```json
+{
+  "mcpServers": {
+    "odoo-mcp": {
+      "url": "http://127.0.0.1:10888/mcp",
+      "headers": {
+        "X-API-Key": "your-mcp-server-api-key"
+      }
+    }
+  }
+}
+```
+
+#### 在 VSCode 中使用（示例）
+
+在 VSCode 中使用支持 MCP 协议的扩展时，可以在工作区根目录（或插件要求的位置）创建 `mcp.config.json` 文件，内容与上面的 `mcpServers` 结构一致。例如：
+
+```json
+{
+  "mcpServers": {
+    "odoo-mcp": {
+      "url": "http://127.0.0.1:10888/mcp",
+      "headers": {
+        "Authorization": "Bearer your-mcp-server-api-key"
+      }
+    }
+  }
+}
+```
+
+> 提示：更多关于认证流程、传输类型（`streamable-http` / `sse`）以及调试方法，请参考项目根目录下的 `API_USAGE.md` 文档。
 
 ## 高级配置
 
@@ -233,15 +300,15 @@ FastMCP框架允许您注册工具和资源，以供大型语言模型(LLM)使�
 ## 版本历史
 
 - 1.1.0 (2025-09-23): 健康检查与自启动改进
-    - 新增健康检查接口 `/api/mcp/server/{id}/health`
-        - 启动流程加入健康检查并据此写回状态
-        - 自启动逻辑会在 state=active 但未监听时自动重启
-        - 版本号提升至 1.1.0
+  - 新增健康检查接口 `/api/mcp/server/{id}/health`
+    - 启动流程加入健康检查并据此写回状态
+    - 自启动逻辑会在 state=active 但未监听时自动重启
+    - 版本号提升至 1.1.0
 
 - 1.0.0 (2025-05-23): 初始版本
-    - 基本MCP服务器管理功能
-    - FastMCP集成
-    - API接口
+  - 基本MCP服务器管理功能
+  - FastMCP集成
+  - API接口
 
 ## 联系与支持
 

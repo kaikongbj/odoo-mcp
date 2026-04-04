@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 import odoo
 from fastmcp import FastMCP, Context
 from odoo import api, fields, SUPERUSER_ID
+from odoo.exceptions import AccessError, AccessDenied, UserError
 
 _logger = logging.getLogger(__name__)
 
@@ -29,6 +30,10 @@ class SafeDatabaseManager:
         with registry.cursor() as cr:
             env = api.Environment(cr, self.uid, dict(self.context))
             yield env
+
+    def with_user(self, uid: int) -> "SafeDatabaseManager":
+        """创建一个使用指定用户 ID 的新实例"""
+        return SafeDatabaseManager(self.db_name, uid, self.context)
 
     async def execute_with_env(self, operation, *args, **kwargs):
         """在独立的 Odoo 环境中执行一个同步 operation(operation 接收 env 作为第一个参数)。"""
@@ -130,28 +135,32 @@ class FastMCPService:
 
         return self.mcp_servers.get(server_id)
 
-    async def _safe_execute_with_env(self, operation, *args, **kwargs):
+    async def _safe_execute_with_env(self, operation, *args, uid: Optional[int] = None, **kwargs):
         """安全执行数据库操作的统一入口方法
-        
+
         这个方法确保：
         1. 使用独立的数据库连接
         2. 自动资源清理和异常处理
         3. 事务管理和回滚机制
         4. 线程安全的操作
-        
+
         Args:
             operation: 要执行的操作函数，第一个参数必须是env
             *args: 传递给操作函数的位置参数
+            uid: 可选的用户 ID，如果指定则使用该用户身份执行
             **kwargs: 传递给操作函数的关键字参数
-            
+
         Returns:
             操作函数的返回值
         """
         try:
-            _logger.debug("开始安全数据库操作执行")
+            _logger.debug("开始安全数据库操作执行 (uid=%s)", uid or "SUPERUSER")
             if not self.db_manager:
                 raise RuntimeError("SafeDatabaseManager 未初始化")
-            result = await self.db_manager.execute_with_env(operation, *args, **kwargs)
+
+            # 如果指定了用户 ID，使用该用户的环境
+            db_manager = self.db_manager.with_user(uid) if uid else self.db_manager
+            result = await db_manager.execute_with_env(operation, *args, **kwargs)
             _logger.debug("安全数据库操作执行成功")
             return result
         except Exception as e:
@@ -160,13 +169,17 @@ class FastMCPService:
             raise
 
     def _query_odoo_model_impl(self, env, model_name, domain=None, fields=None, limit=100, offset=0, order=None):
-        """查询Odoo模型的实现函数"""
+        """查询Odoo模型的实现函数
+
+        注意：不再使用 .sudo()，让 Odoo 的 ACL 和记录规则生效。
+        如果需要管理员权限，应在调用时传入 SUPERUSER_ID。
+        """
         # 验证模型是否存在
         if model_name not in env:
             raise ValueError(f"模型 '{model_name}' 不存在于Odoo中")
 
-        # 获取模型对象
-        model_obj = env[model_name].sudo()
+        # 获取模型对象（不使用 sudo，让权限规则生效）
+        model_obj = env[model_name]
 
         # 处理domain参数
         parsed_domain = []
@@ -224,13 +237,16 @@ class FastMCPService:
         }
 
     def _get_odoo_record_impl(self, env, model_name, record_id):
-        """获取Odoo记录的实现函数"""
+        """获取Odoo记录的实现函数
+
+        注意：不再使用 .sudo()，让 Odoo 的 ACL 和记录规则生效。
+        """
         # 验证模型是否存在
         if model_name not in env:
             raise ValueError(f"模型 '{model_name}' 不存在于Odoo中")
 
-        # 获取记录
-        record = env[model_name].sudo().browse(record_id)
+        # 获取记录（不使用 sudo，让权限规则生效）
+        record = env[model_name].browse(record_id)
         if not record.exists():
             raise ValueError(f"在模型 '{model_name}' 中找不到ID为 {record_id} 的记录")
 
@@ -255,13 +271,16 @@ class FastMCPService:
         }
 
     def _create_odoo_record_impl(self, env, model_name, values):
-        """创建Odoo记录的实现函数"""
+        """创建Odoo记录的实现函数
+
+        注意：不再使用 .sudo()，让 Odoo 的 ACL 和记录规则生效。
+        """
         # 验证模型是否存在
         if model_name not in env:
             raise ValueError(f"模型 '{model_name}' 不存在于Odoo中")
 
-        # 创建记录
-        model_obj = env[model_name].sudo()
+        # 创建记录（不使用 sudo，让权限规则生效）
+        model_obj = env[model_name]
 
         # 处理many2one字段
         processed_values = {}
@@ -290,13 +309,16 @@ class FastMCPService:
         }
 
     def _update_odoo_record_impl(self, env, model_name, record_id, values):
-        """更新Odoo记录的实现函数"""
+        """更新Odoo记录的实现函数
+
+        注意：不再使用 .sudo()，让 Odoo 的 ACL 和记录规则生效。
+        """
         # 验证模型是否存在
         if model_name not in env:
             raise ValueError(f"模型 '{model_name}' 不存在于Odoo中")
 
-        # 获取记录
-        record = env[model_name].sudo().browse(record_id)
+        # 获取记录（不使用 sudo，让权限规则生效）
+        record = env[model_name].browse(record_id)
         if not record.exists():
             raise ValueError(f"在模型 '{model_name}' 中找不到ID为 {record_id} 的记录")
 
@@ -327,13 +349,16 @@ class FastMCPService:
         }
 
     def _delete_odoo_record_impl(self, env, model_name, record_id):
-        """删除Odoo记录的实现函数"""
+        """删除Odoo记录的实现函数
+
+        注意：不再使用 .sudo()，让 Odoo 的 ACL 和记录规则生效。
+        """
         # 验证模型是否存在
         if model_name not in env:
             raise ValueError(f"模型 '{model_name}' 不存在于Odoo中")
 
-        # 获取记录
-        record = env[model_name].sudo().browse(record_id)
+        # 获取记录（不使用 sudo，让权限规则生效）
+        record = env[model_name].browse(record_id)
         if not record.exists():
             raise ValueError(f"在模型 '{model_name}' 中找不到ID为 {record_id} 的记录")
 
@@ -354,13 +379,17 @@ class FastMCPService:
         }
 
     def _get_odoo_model_metadata_impl(self, env, model_name):
-        """获取Odoo模型元数据的实现函数"""
+        """获取Odoo模型元数据的实现函数
+
+        注意：元数据查询使用 sudo() 获取完整字段信息，
+        因为用户可能没有访问 ir.model 的权限。
+        """
         # 验证模型是否存在
         if model_name not in env:
             raise ValueError(f"模型 '{model_name}' 不存在于Odoo中")
 
-        # 获取模型对象
-        model_obj = env[model_name].sudo()
+        # 获取模型对象（不使用 sudo，检查用户是否有访问权限）
+        model_obj = env[model_name]
 
         # 获取模型信息
         ir_model = env['ir.model'].sudo().search([('model', '=', model_name)], limit=1)
@@ -406,6 +435,385 @@ class FastMCPService:
             "data": {
                 "model": model_info,
                 "fields": fields_info
+            }
+        }
+
+    def _execute_model_method_impl(self, env, model_name, method_name, record_ids, args=None, kwargs=None):
+        """执行 Odoo 模型方法的实现函数
+
+        支持调用任意模型上的业务方法，如 action_confirm、button_validate 等。
+        权限由 Odoo ACL 和记录规则控制。
+
+        Args:
+            env: Odoo 环境
+            model_name: 模型名称
+            method_name: 方法名称
+            record_ids: 记录 ID 列表
+            args: 额外位置参数
+            kwargs: 额外关键字参数
+
+        Returns:
+            执行结果字典
+        """
+        # 1. 验证模型是否存在
+        if model_name not in env:
+            raise ValueError(f"模型 '{model_name}' 不存在于Odoo中")
+
+        # 2. 获取模型对象
+        model_obj = env[model_name]
+
+        # 3. 获取记录集
+        if not record_ids:
+            raise ValueError("record_ids 不能为空")
+
+        records = model_obj.browse(record_ids)
+        if not records.exists():
+            missing_ids = set(record_ids) - set(records.ids)
+            raise ValueError(f"记录不存在: {list(missing_ids)}")
+
+        # 4. 记录执行前的状态（用于日志）
+        _logger.info(
+            "执行模型方法: model=%s, method=%s, record_ids=%s, args=%s, kwargs=%s",
+            model_name, method_name, record_ids, args or [], kwargs or {}
+        )
+
+        # 5. 执行方法（使用 getattr，EAFP 风格）
+        args = args or []
+        kwargs = kwargs or {}
+
+        try:
+            method = getattr(records, method_name)
+            result = method(*args, **kwargs)
+        except AttributeError:
+            raise ValueError(f"模型 '{model_name}' 没有方法 '{method_name}'")
+        except Exception as e:
+            _logger.error(
+                "模型方法执行失败: model=%s, method=%s, record_ids=%s, error=%s",
+                model_name, method_name, record_ids, str(e)
+            )
+            raise
+
+        # 6. 处理返回值
+        # Odoo 方法可能返回：
+        # - None (void 方法)
+        # - dict (如 action 返回值)
+        # - recordset
+        # - bool
+        # - 其他类型
+
+        result_data = {
+            "model": model_name,
+            "method": method_name,
+            "record_ids": record_ids,
+            "executed_on": len(records)
+        }
+
+        if result is None:
+            result_data["result"] = None
+            result_data["message"] = f"方法 '{method_name}' 执行成功"
+        elif isinstance(result, dict):
+            # 常见于 action 返回值
+            result_data["result"] = result
+            result_data["result_type"] = "action"
+        elif hasattr(result, 'ids'):
+            # recordset 返回值
+            result_data["result"] = {
+                "model": result._name,
+                "ids": result.ids,
+                "count": len(result)
+            }
+            result_data["result_type"] = "recordset"
+        elif isinstance(result, bool):
+            result_data["result"] = result
+            result_data["result_type"] = "boolean"
+        else:
+            result_data["result"] = str(result)
+            result_data["result_type"] = type(result).__name__
+
+        return {
+            "status": "success",
+            "data": result_data
+        }
+
+    def _send_odoo_message_impl(self, env, body, channel_id=None, partner_ids=None, model=None, res_id=None, subject=None):
+        """发送 Odoo 消息的实现函数"""
+        import time
+        
+        message_values = {'body': body, 'message_type': 'comment'}
+        if subject:
+            message_values['subject'] = subject
+
+        # 场景1：发送到频道/群聊
+        if channel_id:
+            if 'discuss.channel' not in env:
+                raise ValueError("discuss.channel 模型不存在")
+            channel = env['discuss.channel'].browse(channel_id)
+            if not channel.exists():
+                raise ValueError(f"频道不存在: {channel_id}")
+
+            # 重试机制处理并发更新
+            max_retries = 3
+            last_error = None
+            for attempt in range(max_retries):
+                try:
+                    env.clear()
+                    message = channel.message_post(
+                        body=body,
+                        message_type='comment',
+                        subtype_xmlid='mail.mt_note',
+                        author_id=env.user.partner_id.id,
+                    )
+                    env.cr.commit()
+                    return {
+                        "status": "success",
+                        "data": {
+                            "message_id": message.id,
+                            "channel_id": channel_id,
+                            "channel_name": channel.name,
+                            "message_type": "channel"
+                        }
+                    }
+                except Exception as e:
+                    last_error = e
+                    if 'serialize' in str(e) and attempt < max_retries - 1:
+                        time.sleep(0.5 * (attempt + 1))
+                        continue
+                    raise
+
+        # 场景2：在业务记录上留言
+        if model and res_id:
+            if model not in env:
+                raise ValueError(f"模型 '{model}' 不存在")
+
+            record = env[model].browse(res_id)
+            if not record.exists():
+                raise ValueError(f"记录不存在: {model}/#{res_id}")
+
+            message = record.message_post(
+                body=body,
+                subject=subject,
+                message_type='comment',
+                subtype_xmlid='mail.mt_note',
+                author_id=env.user.partner_id.id,  # 使用调用者的身份
+            )
+
+            return {
+                "status": "success",
+                "data": {
+                    "message_id": message.id,
+                    "model": model,
+                    "res_id": res_id,
+                    "message_type": "record"
+                }
+            }
+
+        # 场景3：发送给个人（通过 partner_ids）- 真正的私聊
+        if partner_ids:
+            # 使用 mail.message 直接发送消息
+            target_partner_id = partner_ids[0]
+            target_partner = env['res.partner'].browse(target_partner_id)
+
+            if not target_partner.exists():
+                raise ValueError(f"联系人不存在: {target_partner_id}")
+
+            # 获取评论子类型
+            subtype = env.ref('mail.mt_comment')
+
+            # 创建消息记录
+            message = env['mail.message'].create({
+                'body': body,
+                'message_type': 'comment',
+                'subtype_id': subtype.id,
+                'partner_ids': [(6, 0, partner_ids)],
+                'model': 'res.partner',
+                'res_id': target_partner_id,
+                'author_id': env.user.partner_id.id,
+            })
+
+            # 通过 bus 发送实时通知
+            try:
+                for pid in partner_ids:
+                    env['bus.bus']._sendone(
+                        'res.partner/' + str(pid),
+                        'mail.message/inbox',
+                        message.message_format()[0] if hasattr(message, 'message_format') else {
+                            'id': message.id,
+                            'body': body,
+                            'author_id': [env.user.partner_id.id, env.user.partner_id.name],
+                        }
+                    )
+            except Exception:
+                pass  # 实时通知失败不影响消息发送
+
+            return {
+                "status": "success",
+                "data": {
+                    "message_id": message.id,
+                    "partner_ids": partner_ids,
+                    "partner_name": target_partner.name,
+                    "message_type": "private"
+                }
+            }
+
+        raise ValueError("必须指定 channel_id、(model+res_id) 或 partner_ids 中至少一个参数")
+
+    def _get_channel_messages_impl(self, env, channel_id, limit=50, before_id=None):
+        """获取频道消息历史的实现函数
+
+        只返回用户是成员的频道消息。
+
+        Args:
+            env: Odoo 环境
+            channel_id: 频道 ID
+            limit: 返回消息数量
+            before_id: 获取此 ID 之前的消息
+
+        Returns:
+            消息列表字典
+        """
+        if 'discuss.channel' not in env:
+            raise ValueError("discuss.channel 模型不存在，请安装 discuss 模块")
+
+        channel = env['discuss.channel'].browse(channel_id)
+        if not channel.exists():
+            raise ValueError(f"频道不存在: {channel_id}")
+
+        # 检查用户是否是频道成员
+        current_partner = env.user.partner_id
+        is_member = current_partner in channel.channel_member_ids.mapped('partner_id')
+
+        if not is_member:
+            raise ValueError(f"您不是频道 '{channel.name}' 的成员，无法访问消息")
+
+        # 构建查询条件
+        domain = [('model', '=', 'discuss.channel'), ('res_id', '=', channel_id)]
+        if before_id:
+            domain.append(('id', '<', before_id))
+
+        # 查询消息，按 ID 降序（最新的在前）
+        messages = env['mail.message'].search(
+            domain,
+            limit=limit,
+            order='id DESC'
+        )
+
+        # 格式化消息
+        result_messages = []
+        for msg in messages:
+            msg_data = {
+                'id': msg.id,
+                'author': {
+                    'id': msg.author_id.id if msg.author_id else None,
+                    'name': msg.author_id.name if msg.author_id else '系统'
+                },
+                'body': msg.body,
+                'subject': msg.subject,
+                'date': msg.date.isoformat() if msg.date else None,
+                'message_type': msg.message_type,
+            }
+            result_messages.append(msg_data)
+
+        return {
+            "status": "success",
+            "data": {
+                "channel_id": channel_id,
+                "channel_name": channel.name,
+                "channel_type": channel.channel_type,
+                "count": len(result_messages),
+                "messages": result_messages
+            }
+        }
+
+    def _get_partner_chat_impl(self, env, partner_id, limit=50, before_id=None):
+        """获取与指定联系人私聊消息的实现函数
+
+        只返回当前用户参与的私聊。
+
+        Args:
+            env: Odoo 环境
+            partner_id: 联系人 ID
+            limit: 返回消息数量
+            before_id: 获取此 ID 之前的消息
+
+        Returns:
+            消息列表字典
+        """
+        if 'discuss.channel' not in env:
+            raise ValueError("discuss.channel 模型不存在，请安装 discuss 模块")
+
+        # 验证联系人存在
+        partner = env['res.partner'].browse(partner_id)
+        if not partner.exists():
+            raise ValueError(f"联系人不存在: {partner_id}")
+
+        # 获取当前用户
+        current_partner = env.user.partner_id
+
+        # 查找当前用户与该联系人的私聊频道
+        # 必须同时包含当前用户和目标联系人才是有效的私聊
+        channel = env['discuss.channel'].search([
+            ('channel_type', '=', 'chat'),
+            ('channel_member_ids.partner_id', '=', current_partner.id),
+            ('channel_member_ids.partner_id', '=', partner_id),
+        ], limit=1)
+
+        # 验证频道确实包含两个成员
+        if channel:
+            member_ids = channel.channel_member_ids.mapped('partner_id').ids
+            if current_partner.id not in member_ids or partner_id not in member_ids:
+                channel = None
+
+        if not channel:
+            # 没有私聊记录，返回空结果
+            return {
+                "status": "success",
+                "data": {
+                    "partner_id": partner_id,
+                    "partner_name": partner.name,
+                    "channel_id": None,
+                    "count": 0,
+                    "messages": [],
+                    "message": f"与 {partner.name} 暂无私聊记录"
+                }
+            }
+
+        # 构建查询条件
+        domain = [('model', '=', 'discuss.channel'), ('res_id', '=', channel.id)]
+        if before_id:
+            domain.append(('id', '<', before_id))
+
+        # 查询消息
+        messages = env['mail.message'].search(
+            domain,
+            limit=limit,
+            order='id DESC'
+        )
+
+        # 格式化消息
+        result_messages = []
+        for msg in messages:
+            msg_data = {
+                'id': msg.id,
+                'author': {
+                    'id': msg.author_id.id if msg.author_id else None,
+                    'name': msg.author_id.name if msg.author_id else '系统'
+                },
+                'body': msg.body,
+                'subject': msg.subject,
+                'date': msg.date.isoformat() if msg.date else None,
+                'message_type': msg.message_type,
+            }
+            result_messages.append(msg_data)
+
+        return {
+            "status": "success",
+            "data": {
+                "partner_id": partner_id,
+                "partner_name": partner.name,
+                "channel_id": channel.id,
+                "channel_name": channel.name,
+                "count": len(result_messages),
+                "messages": result_messages
             }
         }
 
@@ -506,6 +914,92 @@ class FastMCPService:
             }
         }
 
+    def _authenticate_user_impl(self, env, username: str, password: str) -> Optional[int]:
+        """验证用户凭据，返回用户 ID
+        使用 Odoo 18 的密码验证机制
+        """
+        try:
+            # 查找用户
+            user = env['res.users'].sudo().search([('login', '=', username)], limit=1)
+            if not user:
+                _logger.warning("MCP 认证失败: 用户不存在 - %s", username)
+                return None
+            
+            # 获取存储的密码哈希
+            env.cr.execute("SELECT COALESCE(password, '') FROM res_users WHERE id=%s", [user.id])
+            [hashed] = env.cr.fetchone()
+            
+            if not hashed:
+                _logger.warning("MCP 认证失败: 用户没有设置密码 - %s", username)
+                return None
+            
+            # 使用 Odoo 的 CryptContext 验证密码
+            # Odoo 18 使用 pbkdf2_sha512
+            ctx = env['res.users']._crypt_context()
+            try:
+                valid = ctx.verify(password, hashed)
+            except Exception as verify_err:
+                _logger.error("密码验证异常: %s", str(verify_err))
+                valid = False
+            
+            if valid:
+                _logger.info("MCP 认证成功: username=%s, user_id=%s", username, user.id)
+                return user.id
+            else:
+                _logger.warning("MCP 认证失败: 密码错误 - %s", username)
+                return None
+        except Exception as e:
+            _logger.error("MCP 认证异常: %s", str(e))
+            return None
+            
+            # 获取存储的密码哈希
+            env.cr.execute("SELECT COALESCE(password, '') FROM res_users WHERE id=%s", [user.id])
+            [hashed] = env.cr.fetchone()
+            
+            if not hashed:
+                _logger.warning("MCP 认证失败: 用户没有设置密码 - %s", username)
+                return None
+            
+            # 使用 passlib 验证密码
+            ctx = CryptContext(schemes=['pbkdf2_sha512', 'plaintext'])
+            try:
+                valid = ctx.verify(password, hashed)
+            except Exception:
+                valid = False
+            
+            if valid:
+                _logger.info("MCP 认证成功: username=%s, user_id=%s", username, user.id)
+                return user.id
+            else:
+                _logger.warning("MCP 认证失败: 密码错误 - %s", username)
+                return None
+        except Exception as e:
+            _logger.error("MCP 认证异常: %s", str(e))
+            return None
+            
+            # 获取存储的密码哈希
+            env.cr.execute("SELECT COALESCE(password, '') FROM res_users WHERE id=%s", [user.id])
+            [hashed] = env.cr.fetchone()
+            
+            if not hashed:
+                _logger.warning("MCP 认证失败: 用户没有设置密码 - %s", username)
+                return None
+            
+            # 使用 Odoo 的密码验证
+            valid, replacement = env.cr._crypt_context.verify_and_update(password, hashed)
+            
+            if valid:
+                _logger.info("MCP 认证成功: username=%s, user_id=%s", username, user.id)
+                return user.id
+            else:
+                _logger.warning("MCP 认证失败: 密码错误 - %s", username)
+                return None
+        except Exception as e:
+            _logger.error("MCP 认证异常: %s", str(e))
+            return None
+        except Exception as e:
+            _logger.error("MCP 认证异常: %s", str(e))
+            return None
     def _authorize_api_key_impl(self, env, api_key: Optional[str], server_id: int) -> bool:
         """授权检查实现：校验 api_key 是否匹配给定服务器
 
@@ -516,7 +1010,7 @@ class FastMCPService:
         _logger.debug("🔐 开始授权检查: server_id=%s, token=%s", server_id,
                       f"***{api_key[-4:]}" if api_key and len(api_key) > 4 else "None")
         _logger.debug("🎫 认证令牌来源: %s", "serverAuthToken" if api_key else "无令牌")
-        
+
         if not api_key:
             _logger.warning("授权失败: API Key 为空 (server_id=%s)", server_id)
             raise ValueError("Unauthorized")
@@ -533,7 +1027,7 @@ class FastMCPService:
 
         # 记录服务器信息（用于调试）
         _logger.debug("找到服务器记录: id=%s, name='%s', active=%s", srv.id, srv.name, srv.active)
-        
+
         # 精确匹配该服务器的 api_key
         expected_key = str(srv.api_key or '')
         provided_key = str(api_key)
@@ -678,238 +1172,110 @@ class FastMCPService:
             _logger.debug("记录客户端连接信息时出错: %s", str(e))
 
     def _extract_api_key_from_ctx(self, ctx: Optional[Context]) -> Optional[str]:
-        """仅从“客户端提供的 MCP 连接上下文”中提取 api_key。
+        """仅从 HTTP 请求头中提取 api_key。
 
-        安全准则：不从服务器自身进程环境变量读取，避免“未提供 api_key 也能通过”的风险。
+        安全准则：不从服务器自身进程环境变量读取，避免"未提供 api_key 也能通过"的风险。
 
-        可用来源（由客户端在握手时注入）：
-        - ctx.metadata / ctx.meta / ctx.env / ctx.environment / ctx.params / ctx.client_info / ctx.headers
-        - 兼容 dict-like: ctx.get('api_key')
+        使用 FastMCP 的 get_http_headers() 函数获取 HTTP 请求头。
         """
-        _logger.info("🚀 开始从上下文提取API Key: ctx=%s", type(ctx).__name__ if ctx else "None")
-        
-        if not ctx:
-            _logger.info("上下文为空，无API Key")
-            return None
+        _logger.info("🚀 开始从 HTTP 请求头提取 API Key")
 
-        # 直接检查 Context 对象的基本信息
-        _logger.info("🔍 Context 对象基本信息: %s", ctx)
-        _logger.info("🔍 Context 对象类型: %s", type(ctx))
-        _logger.info("🔍 Context 对象模块: %s", getattr(type(ctx), '__module__', 'unknown'))
-
-        # 记录完整的客户端连接信息
-        self._log_client_connection_info(ctx)
-
-        _logger.info("📋 准备进入 serverAuthToken 提取逻辑")
+        # 方法1：使用 FastMCP 的 get_http_headers() 获取请求头
         try:
-            _logger.info("🔍 开始查找 serverAuthToken（MCP标准认证方式）")
+            from fastmcp.server.dependencies import get_http_headers
+            headers = get_http_headers(include_all=True)
+            _logger.info("✅ 获取到 HTTP Headers: %s", list(headers.keys()))
 
-            # 通过 FastMCP Context 的 get_http_request 方法获取 HTTP 请求信息
-            headers = None
-            _logger.info("🌐 尝试通过 ctx.get_http_request() 获取 HTTP 请求信息")
+            # 检查 Authorization Bearer token
+            auth_header = headers.get("authorization") or headers.get("Authorization")
+            if auth_header and str(auth_header).startswith("Bearer "):
+                token = str(auth_header)[7:]
+                _logger.info("✅ 从 Authorization Bearer header 提取到 API Key: %s", f"***{token[-4:]}")
+                return token
 
-            try:
-                if hasattr(ctx, 'get_http_request'):
-                    http_request = ctx.get_http_request()
-                    _logger.info("✅ 获取到 HTTP 请求对象: %s (类型: %s)", http_request,
-                                 type(http_request).__name__ if http_request else "None")
+            # 检查自定义认证 header (serverAuthToken)
+            server_auth = headers.get("serverauthtoken") or headers.get("serverAuthToken")
+            if server_auth:
+                _logger.info("✅ 从 serverAuthToken header 提取到 API Key: %s", f"***{server_auth[-4:]}")
+                return str(server_auth)
 
-                    if http_request:
-                        # 检查 HTTP 请求对象的属性
-                        _logger.info("🔍 HTTP 请求对象属性: %s",
-                                     [attr for attr in dir(http_request) if not attr.startswith('_')])
-
-                        # 尝试获取 headers
-                        if hasattr(http_request, 'headers'):
-                            headers = http_request.headers
-                            _logger.info("✅ 从 HTTP 请求对象获取到 headers: %s (类型: %s)", headers,
-                                         type(headers).__name__)
-                        elif hasattr(http_request, 'get_headers'):
-                            headers = http_request.get_headers()
-                            _logger.info("✅ 通过 get_headers() 获取到 headers: %s (类型: %s)", headers,
-                                         type(headers).__name__)
-                        else:
-                            _logger.warning("❌ HTTP 请求对象没有 headers 属性")
-                else:
-                    _logger.warning("❌ Context 对象没有 get_http_request 方法")
-            except Exception as e:
-                _logger.error("❌ 调用 get_http_request() 时出错: %s", str(e))
-
-            # 如果还是没有获取到 headers，尝试传统方式
-            if not headers:
-                _logger.info("❌ 未通过 HTTP 请求获取到 headers，尝试传统属性访问")
-                # 尝试通过不同的属性名访问
-                for header_attr in ['headers', 'request_headers', 'http_headers', 'metadata']:
-                    alt_headers = getattr(ctx, header_attr, None)
-                    _logger.info("🔍 检查属性 %s: %s", header_attr, alt_headers)
-                    if alt_headers:
-                        _logger.info("✅ 在属性 %s 中找到数据: %s", header_attr, alt_headers)
-                        if isinstance(alt_headers, dict):
-                            headers = alt_headers
-                            break
-
-            # 处理不同类型的 headers 对象
-            headers_dict = None
-            if headers:
-                _logger.info("🌐 检查 headers 对象类型: %s", type(headers).__name__)
-
-                if isinstance(headers, dict):
-                    headers_dict = headers
-                    _logger.info("✅ headers 是字典类型: %s", list(headers.keys()))
-                elif hasattr(headers, 'items'):
-                    # 类似字典的对象
-                    try:
-                        headers_dict = dict(headers.items())
-                        _logger.info("✅ 将 headers 转换为字典: %s", list(headers_dict.keys()))
-                    except Exception as e:
-                        _logger.warning("❌ 无法转换 headers 为字典: %s", e)
-                elif hasattr(headers, '__getitem__'):
-                    # 可以通过索引访问的对象
-                    _logger.info("✅ headers 支持索引访问，尝试获取常见 header")
-                    headers_dict = {}
-                    for header_name in ['Authorization', 'authorization', 'Content-Type', 'User-Agent']:
-                        try:
-                            value = headers[header_name]
-                            if value:
-                                headers_dict[header_name] = value
-                        except (KeyError, TypeError):
-                            pass
-                    _logger.info("✅ 提取的 headers: %s", list(headers_dict.keys()))
-                else:
-                    _logger.warning("❌ 不支持的 headers 类型: %s", type(headers))
-
-            if headers_dict:
-                _logger.info("🌐 最终检查 HTTP Headers: %s", list(headers_dict.keys()))
-
-                # 检查 Authorization header (Bearer token)
-                auth_header = headers_dict.get("Authorization") or headers_dict.get("authorization")
-                _logger.info("🔒 检查 Authorization header: %s", "找到" if auth_header else "未找到")
-                if auth_header:
-                    _logger.info("🔒 Authorization header 内容: %s",
-                                 f"Bearer ***{str(auth_header)[-4:]}" if len(str(auth_header)) > 10 else "Bearer ***")
-                    if str(auth_header).startswith("Bearer "):
-                        token = str(auth_header)[7:]  # 移除 "Bearer " 前缀
-                        token_length = len(token)
-                        masked_token = f"***{token[-4:]}" if token_length > 4 else "***"
-                        _logger.info("✅ 从 Authorization Bearer header 中提取到 serverAuthToken: %s (长度: %d)",
-                                     masked_token, token_length)
-                        _logger.debug("🎯 serverAuthToken 认证成功，使用 HTTP Bearer token 方式")
-                        return token
-
-                # 检查其他可能的认证 headers（支持自定义 serverAuthTokenHeader）
-                for header_name, header_value in headers_dict.items():
-                    if any(token_hint in header_name.lower() for token_hint in ['token', 'auth', 'key']):
-                        if header_name.lower() not in ['authorization']:  # 避免重复处理
-                            token_length = len(str(header_value))
-                            masked_token = f"***{str(header_value)[-4:]}" if token_length > 4 else "***"
-                            _logger.info("✅ 从自定义认证 header '%s' 中找到令牌: %s (长度: %d)",
-                                         header_name, masked_token, token_length)
-                            _logger.debug("🎯 使用自定义 serverAuthToken header: %s", header_name)
-                            return str(header_value)
-            else:
-                _logger.info("❌ 未能获取到有效的 HTTP headers")
-
-            # 其次检查上下文属性（备用方式）
-            _logger.debug("🔍 在上下文属性中查找 serverAuthToken（备用方式）")
-            for attr in ("metadata", "meta", "params", "client_info"):
-                d = getattr(ctx, attr, None)
-                _logger.debug("🔎 检查上下文属性 %s: %s", attr, type(d).__name__ if d else "None")
-                if isinstance(d, dict):
-                    _logger.debug("📋 属性 %s 包含的键: %s", attr, list(d.keys()))
-
-                    # 详细记录 serverAuthToken 查找过程
-                    _logger.debug("🔑 在 %s 中搜索 serverAuthToken", attr)
-                    server_auth_token = d.get("serverAuthToken")
-
-                    if server_auth_token:
-                        token_length = len(str(server_auth_token))
-                        masked_token = f"***{str(server_auth_token)[-4:]}" if token_length > 4 else "***"
-                        _logger.info("✅ 在 %s.serverAuthToken 中找到认证令牌: %s (长度: %d)",
-                                     attr, masked_token, token_length)
-                        _logger.debug("🎯 serverAuthToken 认证成功，使用上下文属性方式")
-                        return str(server_auth_token)
-                    else:
-                        _logger.debug("❌ 在 %s 中未找到 serverAuthToken", attr)
-                else:
-                    _logger.debug("⚠️  属性 %s 不是字典类型，跳过", attr)
-
-            _logger.warning("⚠️  未在 HTTP Headers 或上下文属性中找到 serverAuthToken，将尝试后备认证方式")
-
-            # 环境变量不应该用于认证，但记录它们用于调试
-            for attr in ("env", "environment"):
-                d = getattr(ctx, attr, None)
-                if isinstance(d, dict) and d:
-                    _logger.debug("检查环境变量属性 %s (不用于认证): %s", attr, list(d.keys()))
-                    # 警告：不从环境变量中提取认证信息
-                    if any(key.lower() in ["api_key", "mcp_api_key", "token"] for key in d.keys()):
-                        _logger.warning("⚠️  在环境变量中发现认证相关字段，但不会用于认证。请使用 serverAuthToken")
-
-            # 作为后备，检查其他可能的认证字段（但记录警告）
-            for attr in ("metadata", "meta", "params", "client_info", "headers"):
-                d = getattr(ctx, attr, None)
-                if isinstance(d, dict):
-                    for k in ("api_key", "mcp_api_key", "apikey", "token"):
-                        v = d.get(k)
-                        if v:
-                            _logger.warning("⚠️  在 %s.%s 中找到认证信息，建议使用 serverAuthToken: %s",
-                                            attr, k, f"***{str(v)[-4:]}" if len(str(v)) > 4 else str(v))
-                            return str(v)
+            # 检查其他可能的认证 header
+            for header_name, header_value in headers.items():
+                if any(token_hint in header_name.lower() for token_hint in ['token', 'auth', 'key']):
+                    if header_name.lower() not in ['authorization']:
+                        _logger.info("✅ 从自定义 header '%s' 提取到 API Key", header_name)
+                        return str(header_value)
 
         except Exception as e:
-            _logger.error("❌ 从上下文提取认证令牌时出错: %s", str(e))
-            _logger.error("异常详情: %s", traceback.format_exc())
+            _logger.debug("获取 HTTP Headers 失败: %s", str(e))
 
-        try:
-            if hasattr(ctx, "get"):
-                v = ctx.get("api_key")
-                if v:
-                    _logger.debug("从ctx.get('api_key')找到API Key: %s",
-                                  f"***{str(v)[-4:]}" if len(str(v)) > 4 else str(v))
-                    return str(v)
-                else:
-                    _logger.debug("ctx.get('api_key') 返回空值")
-        except Exception as e:
-            _logger.debug("从ctx.get()提取API Key时出错: %s", str(e))
-
-        _logger.debug("未能从上下文中提取到API Key")
+        _logger.warning("⚠️  未在 HTTP Headers 中找到 API Key")
         return None
 
-    async def _ensure_authorized_ctx(self, ctx: Optional[Context], server_id: int) -> bool:
-        """统一授权入口：从 ctx 中提取 serverAuthToken 并校验"""
-        _logger.debug("🚀 开始统一授权检查: server_id=%s", server_id)
-        _logger.debug("🔍 准备从上下文提取 serverAuthToken")
-        
+    async def _ensure_authorized_ctx(self, ctx: Optional[Context], server_id: int, username: str, password: str) -> tuple[bool, Optional[int]]:
+        """
+        统一授权入口
+
+        Args:
+            ctx: FastMCP Context
+            server_id: MCP 服务器 ID
+            username: Odoo 用户名（必填）
+            password: Odoo 密码（必填）
+
+        Returns:
+            (is_authorized, user_id)
+            - (True, 5): 用户认证成功，用户 ID=5
+            - (True, 1): 管理员模式（未提供用户凭据，使用 API Key）
+            - (False, None): 认证失败
+        """
+        _logger.debug("🚀 开始统一授权检查: server_id=%s, username=%s", server_id, username or "None")
+
         try:
+            # 1. 如果提供了用户凭据，验证用户
+            if username and password:
+                _logger.debug("🔐 使用用户名/密码认证")
+                user_id = await self._safe_execute_with_env(
+                    self._authenticate_user_impl, username, password
+                )
+                if user_id:
+                    _logger.info("🎉 用户认证成功: server_id=%s, username=%s, user_id=%s", server_id, username, user_id)
+                    return (True, user_id)
+                else:
+                    _logger.warning("💥 用户认证失败: username=%s", username)
+                    return (False, None)
+
+            # 2. 未提供用户凭据，验证服务器 API Key（管理员模式）
+            _logger.debug("🔐 使用 API Key 认证（管理员模式）")
             key = self._extract_api_key_from_ctx(ctx)
             if key:
                 _logger.debug("✅ 成功提取到认证令牌: %s", f"***{key[-4:]}" if len(key) > 4 else "***")
-                _logger.debug("🔐 准备验证 serverAuthToken 与服务器配置")
             else:
                 _logger.warning("❌ 未能提取到有效的 serverAuthToken")
-            
+
             ok = await self._safe_execute_with_env(self._authorize_api_key_impl, key, server_id)
-            auth_result = bool(ok)
-            if auth_result:
-                _logger.info("🎉 serverAuthToken 授权检查成功: server_id=%s", server_id)
+            if ok:
+                _logger.info("🎉 API Key 授权成功: server_id=%s (管理员模式)", server_id)
+                return (True, SUPERUSER_ID)
             else:
-                _logger.error("💥 serverAuthToken 授权检查失败: server_id=%s", server_id)
-            return auth_result
+                _logger.error("💥 API Key 授权失败: server_id=%s", server_id)
+                return (False, None)
         except Exception as e:
             _logger.error("授权检查异常: %s", str(e))
             _logger.debug("授权检查异常详情: %s", traceback.format_exc())
-            
+
             if ctx:
                 try:
                     await ctx.error("Unauthorized")
                 except Exception as ctx_err:
                     _logger.debug("发送错误消息到上下文失败: %s", str(ctx_err))
-            
-            return False
 
-    async def _graphql_impl(self, server_id: int, query: str, variables: Optional[Dict[str, Any]], ctx: Optional[Context]) -> Dict[str, Any]:
+            return (False, None)
+
+    async def _graphql_impl(self, server_id: int, query: str, variables: Optional[Dict[str, Any]], ctx: Optional[Context], username: str, password: str) -> Dict[str, Any]:
         """GraphQL 执行实现，供工具委托调用"""
         try:
-            if not await self._ensure_authorized_ctx(ctx, server_id):
+            is_authorized, user_id = await self._ensure_authorized_ctx(ctx, server_id, username, password)
+            if not is_authorized:
                 return {"errors": ["Unauthorized"], "code": 401}
             from .graphql_schema import build_schema
             schema = build_schema()
@@ -921,7 +1287,7 @@ class FastMCPService:
                     context_value={"env": env},
                 )
 
-            result = await self._safe_execute_with_env(lambda env: sync_op(env))
+            result = await self._safe_execute_with_env(lambda env: sync_op(env), uid=user_id)
             payload: Dict[str, Any] = {}
             if getattr(result, "errors", None):
                 payload["errors"] = [str(e) for e in result.errors]
@@ -934,6 +1300,12 @@ class FastMCPService:
                 else:
                     await ctx.info("GraphQL 查询执行成功")
             return payload
+        except AccessError as e:
+            error_msg = f"权限不足: {str(e)}"
+            if ctx:
+                await ctx.error(error_msg)
+            _logger.warning("权限错误: %s", str(e))
+            return {"errors": [error_msg], "code": 403}
         except Exception as e:
             _logger.error("GraphQL 执行失败: %s", str(e))
             if ctx:
@@ -946,11 +1318,11 @@ class FastMCPService:
     def _register_default_tools(self, mcp_server, server_record):
         """注册默认工具到FastMCP服务器"""
 
-        # 使用类方法进行授权检查
-
         # ===== Odoo数据访问工具 =====
         @mcp_server.tool()
-        async def query_odoo_model(
+        async def query_odoo_model(username: str,
+            password: str,
+            
             model_name: str,
             domain: Optional[str] = None,
             fields: Optional[str] = None,
@@ -960,29 +1332,33 @@ class FastMCPService:
             ctx: Context = None,
         ) -> Dict[str, Any]:
             """查询任意Odoo模型的数据
-            
+
             Args:
                 model_name: Odoo模型名称 (例如 'res.partner', 'product.template')
-                domain: 搜索域JSON字符串 (例如 '[["is_company", "=", true], ["customer_rank", ">", 0]]')
+                domain: 搜索域JSON字符串 (例如 '[["is_company", "=", true]]')
                 fields: 要获取的字段JSON字符串 (例如 '["name", "email", "phone"]')
                 limit: 最大返回记录数
                 offset: 记录偏移量
-                order: 排序字段和方向 (例如 'name ASC, create_date DESC')
-                
+                order: 排序字段和方向 (例如 'name ASC')
+                username: Odoo 用户名（可选，不提供则使用管理员权限）
+                password: Odoo 密码（可选，与 username 配合使用）
+
             Returns:
                 包含查询结果的字典
             """
             try:
-                # 授权校验（从 ctx / 环境 读取 api_key）
-                if not await self._ensure_authorized_ctx(ctx, server_record.id):
+                # 授权校验
+                is_authorized, user_id = await self._ensure_authorized_ctx(ctx, server_record.id, username, password)
+                if not is_authorized:
                     return {"status": "error", "code": 401, "message": "Unauthorized"}
                 if ctx:
-                    await ctx.info(f"开始查询模型 '{model_name}'，参数: domain={domain}, fields={fields}")
+                    await ctx.info(f"开始查询模型 '{model_name}' (user_id={user_id})")
 
-                # 使用安全执行方法
+                # 使用安全执行方法（指定用户 ID）
                 result = await self._safe_execute_with_env(
                     self._query_odoo_model_impl,
-                    model_name, domain, fields, limit, offset, order
+                    model_name, domain, fields, limit, offset, order,
+                    uid=user_id
                 )
 
                 if ctx:
@@ -992,6 +1368,12 @@ class FastMCPService:
                     await ctx.info(f"从 '{model_name}' 查询到 {count} 条记录 (共 {total_count} 条)")
 
                 return result
+            except AccessError as e:
+                error_msg = f"权限不足: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                _logger.warning("权限错误: %s", str(e))
+                return {"status": "error", "code": 403, "message": error_msg}
             except Exception as e:
                 error_msg = f"查询Odoo模型失败: {str(e)}"
                 if ctx:
@@ -1000,29 +1382,42 @@ class FastMCPService:
                 return {"status": "error", "message": error_msg}
 
         @mcp_server.tool()
-        async def get_odoo_record(model_name: str, record_id: int, ctx: Context = None) -> Dict[str, Any]:
-            """获取Odoo中指定记录的详细信息
+        async def get_odoo_record(username: str,
+            password: str,
             
+            model_name: str,
+            record_id: int,
+             ctx: Context = None
+        ) -> Dict[str, Any]:
+            """获取Odoo中指定记录的详细信息
+
             Args:
                 model_name: Odoo模型名称 (例如 'res.partner')
                 record_id: 记录ID
-                
+                username: Odoo 用户名（必填）
+                password: Odoo 密码（必填）
+
             Returns:
                 包含记录详细信息的字典
             """
             try:
-                if not await self._ensure_authorized_ctx(ctx, server_record.id):
+                is_authorized, user_id = await self._ensure_authorized_ctx(ctx, server_record.id, username, password)
+                if not is_authorized:
                     return {"status": "error", "code": 401, "message": "Unauthorized"}
-                # 使用安全执行方法
                 result = await self._safe_execute_with_env(
                     self._get_odoo_record_impl,
-                    model_name, record_id
+                    model_name, record_id,
+                    uid=user_id
                 )
-
                 if ctx:
                     await ctx.info(f"成功获取模型 '{model_name}' 中ID为 {record_id} 的记录")
-
                 return result
+            except AccessError as e:
+                error_msg = f"权限不足: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                _logger.warning("权限错误: %s", str(e))
+                return {"status": "error", "code": 403, "message": error_msg}
             except Exception as e:
                 error_msg = f"获取Odoo记录失败: {str(e)}"
                 if ctx:
@@ -1031,31 +1426,44 @@ class FastMCPService:
                 return {"status": "error", "message": error_msg}
 
         @mcp_server.tool()
-        async def create_odoo_record(model_name: str, values: Dict[str, Any], ctx: Context = None) -> Dict[str, Any]:
-            """在Odoo中创建新记录
+        async def create_odoo_record(username: str,
+            password: str,
             
+            model_name: str,
+            values: Dict[str, Any],
+             ctx: Context = None
+        ) -> Dict[str, Any]:
+            """在Odoo中创建新记录
+
             Args:
                 model_name: Odoo模型名称 (例如 'res.partner')
-                values: 要创建的记录的字段值 (例如 {"name": "新客户", "email": "customer@example.com"})
-                
+                values: 要创建的记录的字段值
+                username: Odoo 用户名（必填）
+                password: Odoo 密码（必填）
+
             Returns:
                 包含新创建记录信息的字典
             """
             try:
-                if not await self._ensure_authorized_ctx(ctx, server_record.id):
+                is_authorized, user_id = await self._ensure_authorized_ctx(ctx, server_record.id, username, password)
+                if not is_authorized:
                     return {"status": "error", "code": 401, "message": "Unauthorized"}
-                # 使用安全执行方法
                 result = await self._safe_execute_with_env(
                     self._create_odoo_record_impl,
-                    model_name, values
+                    model_name, values,
+                    uid=user_id
                 )
-
                 if ctx:
                     data = result.get('data', {})
                     record_id = data.get('id', 'unknown')
                     await ctx.info(f"在模型 '{model_name}' 中成功创建了新记录，ID: {record_id}")
-
                 return result
+            except AccessError as e:
+                error_msg = f"权限不足: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                _logger.warning("权限错误: %s", str(e))
+                return {"status": "error", "code": 403, "message": error_msg}
             except Exception as e:
                 error_msg = f"创建Odoo记录失败: {str(e)}"
                 if ctx:
@@ -1064,30 +1472,44 @@ class FastMCPService:
                 return {"status": "error", "message": error_msg}
 
         @mcp_server.tool()
-        async def update_odoo_record(model_name: str, record_id: int, values: Dict[str, Any], ctx: Context = None) -> Dict[str, Any]:
-            """更新Odoo中的记录
+        async def update_odoo_record(username: str,
+            password: str,
             
+            model_name: str,
+            record_id: int,
+            values: Dict[str, Any],
+             ctx: Context = None
+        ) -> Dict[str, Any]:
+            """更新Odoo中的记录
+
             Args:
                 model_name: Odoo模型名称 (例如 'res.partner')
                 record_id: 要更新的记录ID
-                values: 要更新的字段值 (例如 {"name": "更新的名称", "email": "new@example.com"})
-                
+                values: 要更新的字段值
+                username: Odoo 用户名（必填）
+                password: Odoo 密码（必填）
+
             Returns:
                 包含更新后记录信息的字典
             """
             try:
-                if not await self._ensure_authorized_ctx(ctx, server_record.id):
+                is_authorized, user_id = await self._ensure_authorized_ctx(ctx, server_record.id, username, password)
+                if not is_authorized:
                     return {"status": "error", "code": 401, "message": "Unauthorized"}
-                # 使用安全执行方法
                 result = await self._safe_execute_with_env(
                     self._update_odoo_record_impl,
-                    model_name, record_id, values
+                    model_name, record_id, values,
+                    uid=user_id
                 )
-
                 if ctx:
                     await ctx.info(f"成功更新了模型 '{model_name}' 中ID为 {record_id} 的记录")
-
                 return result
+            except AccessError as e:
+                error_msg = f"权限不足: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                _logger.warning("权限错误: %s", str(e))
+                return {"status": "error", "code": 403, "message": error_msg}
             except Exception as e:
                 error_msg = f"更新Odoo记录失败: {str(e)}"
                 if ctx:
@@ -1096,31 +1518,44 @@ class FastMCPService:
                 return {"status": "error", "message": error_msg}
 
         @mcp_server.tool()
-        async def delete_odoo_record(model_name: str, record_id: int, ctx: Context = None) -> Dict[str, Any]:
-            """删除Odoo中的记录
+        async def delete_odoo_record(username: str,
+            password: str,
             
+            model_name: str,
+            record_id: int,
+             ctx: Context = None
+        ) -> Dict[str, Any]:
+            """删除Odoo中的记录
+
             Args:
                 model_name: Odoo模型名称 (例如 'res.partner')
                 record_id: 要删除的记录ID
-                
+                username: Odoo 用户名（必填）
+                password: Odoo 密码（必填）
+
             Returns:
                 删除操作的结果
             """
             try:
-                if not await self._ensure_authorized_ctx(ctx, server_record.id):
+                is_authorized, user_id = await self._ensure_authorized_ctx(ctx, server_record.id, username, password)
+                if not is_authorized:
                     return {"status": "error", "code": 401, "message": "Unauthorized"}
-                # 使用安全执行方法
                 result = await self._safe_execute_with_env(
                     self._delete_odoo_record_impl,
-                    model_name, record_id
+                    model_name, record_id,
+                    uid=user_id
                 )
-
                 if ctx:
                     data = result.get('data', {})
                     record_name = data.get('record_name', f'ID: {record_id}')
                     await ctx.info(f"成功删除了模型 '{model_name}' 中的记录: {record_name}")
-
                 return result
+            except AccessError as e:
+                error_msg = f"权限不足: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                _logger.warning("权限错误: %s", str(e))
+                return {"status": "error", "code": 403, "message": error_msg}
             except Exception as e:
                 error_msg = f"删除Odoo记录失败: {str(e)}"
                 if ctx:
@@ -1129,28 +1564,40 @@ class FastMCPService:
                 return {"status": "error", "message": error_msg}
 
         @mcp_server.tool()
-        async def get_odoo_model_metadata(model_name: str, ctx: Context = None) -> Dict[str, Any]:
-            """获取Odoo模型的元数据信息，包括字段定义等
+        async def get_odoo_model_metadata(username: str,
+            password: str,
             
+            model_name: str,
+             ctx: Context = None
+        ) -> Dict[str, Any]:
+            """获取Odoo模型的元数据信息，包括字段定义等
+
             Args:
                 model_name: Odoo模型名称 (例如 'res.partner')
-                
+                username: Odoo 用户名（必填）
+                password: Odoo 密码（必填）
+
             Returns:
                 包含模型元数据信息的字典
             """
             try:
-                if not await self._ensure_authorized_ctx(ctx, server_record.id):
+                is_authorized, user_id = await self._ensure_authorized_ctx(ctx, server_record.id, username, password)
+                if not is_authorized:
                     return {"status": "error", "code": 401, "message": "Unauthorized"}
-                # 使用安全执行方法
                 result = await self._safe_execute_with_env(
                     self._get_odoo_model_metadata_impl,
-                    model_name
+                    model_name,
+                    uid=user_id
                 )
-
                 if ctx:
                     await ctx.info(f"成功获取模型 '{model_name}' 的元数据信息")
-
                 return result
+            except AccessError as e:
+                error_msg = f"权限不足: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                _logger.warning("权限错误: %s", str(e))
+                return {"status": "error", "code": 403, "message": error_msg}
             except Exception as e:
                 error_msg = f"获取Odoo模型元数据失败: {str(e)}"
                 if ctx:
@@ -1160,47 +1607,366 @@ class FastMCPService:
 
         # ===== MCP资源管理工具 =====
         @mcp_server.tool()
-        async def list_resources(ctx: Context) -> Dict[str, Any]:
-            """列出当前MCP服务器上的所有可用资源"""
+        async def list_resources(
+            username: str, password: str, ctx: Context = None
+        ) -> Dict[str, Any]:
+            """列出当前MCP服务器上的所有可用资源
+
+            Args:
+                username: Odoo 用户名（必填）
+                password: Odoo 密码（必填）
+            """
             try:
-                if not await self._ensure_authorized_ctx(ctx, server_record.id):
+                is_authorized, user_id = await self._ensure_authorized_ctx(ctx, server_record.id, username, password)
+                if not is_authorized:
                     return {"status": "error", "code": 401, "message": "Unauthorized"}
                 result = await self._safe_execute_with_env(
                     self._list_resources_impl,
                     server_record.id,
+                    uid=user_id
                 )
-                data = result.get('data', [])
-                await ctx.info(f"获取到 {len(data)} 个资源")
+                if ctx:
+                    data = result.get('data', [])
+                    await ctx.info(f"获取到 {len(data)} 个资源")
                 return result
+            except AccessError as e:
+                error_msg = f"权限不足: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                _logger.warning("权限错误: %s", str(e))
+                return {"status": "error", "code": 403, "message": error_msg}
             except Exception as e:
-                await ctx.error(f"获取资源列表失败: {str(e)}")
+                if ctx:
+                    await ctx.error(f"获取资源列表失败: {str(e)}")
                 _logger.error("FastMCP工具list_resources失败: %s", str(e))
                 return {"status": "error", "message": str(e)}
 
         @mcp_server.tool()
-        async def get_resource_content(resource_uri: str, ctx: Context) -> Dict[str, Any]:
-            """获取指定URI的资源内容"""
+        async def get_resource_content(
+            resource_uri: str,
+            username: str, password: str, ctx: Context = None
+        ) -> Dict[str, Any]:
+            """获取指定URI的资源内容
+
+            Args:
+                resource_uri: 资源URI
+                username: Odoo 用户名（必填）
+                password: Odoo 密码（必填）
+            """
             try:
-                if not await self._ensure_authorized_ctx(ctx, server_record.id):
+                is_authorized, user_id = await self._ensure_authorized_ctx(ctx, server_record.id, username, password)
+                if not is_authorized:
                     return {"status": "error", "code": 401, "message": "Unauthorized"}
                 result = await self._safe_execute_with_env(
                     self._get_resource_content_impl,
                     server_record.id,
                     resource_uri,
+                    uid=user_id
                 )
-                data = result.get('data', {})
-                resource_name = data.get('name', resource_uri)
-                await ctx.info(f"成功获取资源: {resource_name}")
+                if ctx:
+                    data = result.get('data', {})
+                    resource_name = data.get('name', resource_uri)
+                    await ctx.info(f"成功获取资源: {resource_name}")
                 return result
+            except AccessError as e:
+                error_msg = f"权限不足: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                _logger.warning("权限错误: %s", str(e))
+                return {"status": "error", "code": 403, "message": error_msg}
             except Exception as e:
-                await ctx.error(f"获取资源内容失败: {str(e)}")
+                if ctx:
+                    await ctx.error(f"获取资源内容失败: {str(e)}")
                 _logger.error("FastMCP工具get_resource_content失败: %s", str(e))
                 return {"status": "error", "message": str(e)}
 
+        # ===== 模型方法调用工具 =====
+        @mcp_server.tool()
+        async def execute_model_method(username: str,
+            password: str,
+            
+            model_name: str,
+            method_name: str,
+            record_ids: list,
+            args: Optional[list] = None,
+            kwargs: Optional[Dict[str, Any]] = None,
+            ctx: Context = None,
+        ) -> Dict[str, Any]:
+            """执行 Odoo 模型的业务方法
+
+            Args:
+                model_name: Odoo 模型名称 (例如 'sale.order', 'stock.picking')
+                method_name: 要调用的方法名称 (例如 'action_confirm', 'button_validate')
+                record_ids: 要操作的记录 ID 列表
+                args: 传递给方法的额外位置参数（可选）
+                kwargs: 传递给方法的额外关键字参数（可选）
+                username: Odoo 用户名（可选，不提供则使用管理员权限）
+                password: Odoo 密码（可选，与 username 配合使用）
+
+            Returns:
+                包含方法执行结果的字典
+
+            Examples:
+                # 确认销售订单
+                execute_model_method('sale.order', 'action_confirm', [1, 2])
+
+                # 验证库存移动
+                execute_model_method('stock.picking', 'button_validate', [5])
+
+                # 带参数的方法调用
+                execute_model_method('account.move', 'action_post', [10])
+            """
+            try:
+                # 授权校验
+                is_authorized, user_id = await self._ensure_authorized_ctx(ctx, server_record.id, username, password)
+                if not is_authorized:
+                    return {"status": "error", "code": 401, "message": "Unauthorized"}
+                if ctx:
+                    await ctx.info(f"开始执行方法 '{model_name}.{method_name}' (user_id={user_id})")
+
+                # 使用安全执行方法
+                result = await self._safe_execute_with_env(
+                    self._execute_model_method_impl,
+                    model_name, method_name, record_ids, args, kwargs,
+                    uid=user_id
+                )
+
+                if ctx:
+                    await ctx.info(f"成功执行方法 '{model_name}.{method_name}'")
+
+                return result
+            except AccessError as e:
+                error_msg = f"权限不足: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                _logger.warning("权限错误: %s", str(e))
+                return {"status": "error", "code": 403, "message": error_msg}
+            except UserError as e:
+                error_msg = f"业务错误: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                _logger.warning("业务错误: %s", str(e))
+                return {"status": "error", "code": 400, "message": error_msg}
+            except Exception as e:
+                error_msg = f"执行模型方法失败: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                _logger.error(error_msg)
+                return {"status": "error", "message": error_msg}
+
+        # ===== 消息发送工具 =====
+        @mcp_server.tool()
+        async def send_odoo_message(username: str,
+            password: str,
+            
+            body: str,
+            channel_id: Optional[int] = None,
+            partner_ids: Optional[list] = None,
+            model: Optional[str] = None,
+            res_id: Optional[int] = None,
+            subject: Optional[str] = None,
+            ctx: Context = None,
+        ) -> Dict[str, Any]:
+            """发送 Odoo 消息/通知
+
+            Args:
+                body: 消息内容（支持 HTML 格式）
+                channel_id: 频道/群组 ID（可选，发送到群聊）
+                partner_ids: 收件人 ID 列表（可选，发送给个人）
+                model: 关联模型名称（可选，在业务记录上留言）
+                res_id: 关联记录 ID（可选，与 model 配合使用）
+                subject: 消息主题（可选）
+                username: Odoo 用户名（必填）
+                password: Odoo 密码（必填）
+
+            Returns:
+                包含发送结果的字典
+
+            Examples:
+                # 发送到群聊
+                send_odoo_message(body="通知内容", channel_id=1)
+
+                # 发送给个人
+                send_odoo_message(body="消息内容", partner_ids=[13, 46])
+
+                # 在销售订单上留言
+                send_odoo_message(body="备注内容", model="sale.order", res_id=1)
+            """
+            try:
+                is_authorized, user_id = await self._ensure_authorized_ctx(ctx, server_record.id, username, password)
+                if not is_authorized:
+                    return {"status": "error", "code": 401, "message": "Unauthorized"}
+
+                if ctx:
+                    target = f"频道 {channel_id}" if channel_id else f"用户 {partner_ids}" if partner_ids else "系统消息"
+                    await ctx.info(f"开始发送消息到 {target}")
+
+                result = await self._safe_execute_with_env(
+                    self._send_odoo_message_impl,
+                    body, channel_id, partner_ids, model, res_id, subject,
+                    uid=user_id
+                )
+
+                if ctx:
+                    await ctx.info("消息发送成功")
+
+                return result
+            except AccessError as e:
+                error_msg = f"权限不足: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                return {"status": "error", "code": 403, "message": error_msg}
+            except Exception as e:
+                error_msg = f"发送消息失败: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                _logger.error(error_msg)
+                return {"status": "error", "message": error_msg}
+
+        # ===== 消息历史工具 =====
+        @mcp_server.tool()
+        async def get_channel_messages(
+            username: str,
+            password: str,
+            channel_id: int,
+            limit: int = 50,
+            before_id: Optional[int] = None,
+            ctx: Context = None,
+        ) -> Dict[str, Any]:
+            """获取 Odoo 频道/群聊/私聊的消息历史
+
+            Args:
+                channel_id: 频道 ID（可以是群聊频道或私聊频道）
+                limit: 返回消息数量（默认 50）
+                before_id: 获取此 ID 之前的消息（可选，用于分页）
+                username: Odoo 用户名（必填）
+                password: Odoo 密码（必填）
+
+            Returns:
+                包含消息列表的字典
+
+            Examples:
+                # 获取频道最近 50 条消息
+                get_channel_messages(channel_id=1)
+
+                # 获取私聊消息（团团频道 ID: 16）
+                get_channel_messages(channel_id=16)
+
+                # 分页获取
+                get_channel_messages(channel_id=1, limit=20, before_id=1000)
+            """
+            try:
+                is_authorized, user_id = await self._ensure_authorized_ctx(ctx, server_record.id, username, password)
+                if not is_authorized:
+                    return {"status": "error", "code": 401, "message": "Unauthorized"}
+
+                if ctx:
+                    await ctx.info(f"开始获取频道 {channel_id} 的消息历史")
+
+                result = await self._safe_execute_with_env(
+                    self._get_channel_messages_impl,
+                    channel_id, limit, before_id,
+                    uid=user_id
+                )
+
+                if ctx:
+                    count = result.get("data", {}).get("count", 0)
+                    await ctx.info(f"获取到 {count} 条消息")
+
+                return result
+            except AccessError as e:
+                error_msg = f"权限不足: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                return {"status": "error", "code": 403, "message": error_msg}
+            except Exception as e:
+                error_msg = f"获取消息历史失败: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                _logger.error(error_msg)
+                return {"status": "error", "message": error_msg}
+
+        @mcp_server.tool()
+        async def get_partner_chat(
+            username: str,
+            password: str,
+            partner_id: int,
+            limit: int = 50,
+            before_id: Optional[int] = None,
+            ctx: Context = None,
+        ) -> Dict[str, Any]:
+            """获取与指定联系人的私聊消息历史
+
+            Args:
+                partner_id: 联系人 ID（如团团=14，冯总=13）
+                limit: 返回消息数量（默认 50）
+                before_id: 获取此 ID 之前的消息（可选，用于分页）
+                username: Odoo 用户名（必填）
+                password: Odoo 密码（必填）
+
+            Returns:
+                包含消息列表的字典
+
+            Examples:
+                # 获取与团团（partner_id=14）的私聊
+                get_partner_chat(partner_id=14)
+
+                # 获取与冯总（partner_id=13）的私聊
+                get_partner_chat(partner_id=13)
+
+                # 分页获取
+                get_partner_chat(partner_id=14, limit=20, before_id=5000)
+            """
+            try:
+                is_authorized, user_id = await self._ensure_authorized_ctx(ctx, server_record.id, username, password)
+                if not is_authorized:
+                    return {"status": "error", "code": 401, "message": "Unauthorized"}
+
+                if ctx:
+                    await ctx.info(f"开始获取与联系人 {partner_id} 的私聊消息")
+
+                result = await self._safe_execute_with_env(
+                    self._get_partner_chat_impl,
+                    partner_id, limit, before_id,
+                    uid=user_id
+                )
+
+                if ctx:
+                    count = result.get("data", {}).get("count", 0)
+                    channel_name = result.get("data", {}).get("partner_name", "未知")
+                    await ctx.info(f"获取到与 {channel_name} 的 {count} 条消息")
+
+                return result
+            except AccessError as e:
+                error_msg = f"权限不足: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                return {"status": "error", "code": 403, "message": error_msg}
+            except Exception as e:
+                error_msg = f"获取私聊消息失败: {str(e)}"
+                if ctx:
+                    await ctx.error(error_msg)
+                _logger.error(error_msg)
+                return {"status": "error", "message": error_msg}
+
         # ===== GraphQL 工具 =====
         @mcp_server.tool()
-        async def graphql(query: str, variables: Optional[Dict[str, Any]] = None, ctx: Context = None) -> Dict[str, Any]:
-            return await self._graphql_impl(server_record.id, query, variables, ctx)
+        async def graphql(
+            username: str,
+            password: str,
+            query: str,
+            variables: Optional[Dict[str, Any]] = None,
+            ctx: Context = None
+        ) -> Dict[str, Any]:
+            """执行 GraphQL 查询
+            
+            Args:
+                query: GraphQL 查询字符串
+                variables: 查询变量
+                username: Odoo 用户名（必填）
+                password: Odoo 密码（必填）
+            """
+            return await self._graphql_impl(server_record.id, query, variables, ctx, username, password)
 
     def _register_default_resources(self, mcp_server, server_record):
         """注册默认资源到FastMCP服务器"""
@@ -1298,7 +2064,7 @@ class FastMCPService:
                 result = {'success': False, 'error': str(inner_e) or 'unknown'}
 
             # 统一健康回退：
-            # 即使协程报告失败/超时，也以实时健康检查（端口监听）为准，避免“实际已启动但 future 超时”导致的误报。
+            # 即使协程报告失败/超时，也以实时健康检查（端口监听）为准，避免"实际已启动但 future 超时"导致的误报。
             health = self.health_check(server_record)
             data_h = health.get('data', {}) if isinstance(health, dict) else {}
             ready = (
@@ -1327,7 +2093,7 @@ class FastMCPService:
         """异步启动MCP服务器（精简阻塞：端口监听后立即返回）。
 
         设计要点：
-        - 仅负责触发底层线程 + 轮询端口监听；不等待完整“协议预热”流程。
+        - 仅负责触发底层线程 + 轮询端口监听；不等待完整"协议预热"流程。
         - 端口监听成功即返回 {'success': True}；后续预热在后台协程中异步执行。
         - 防止长时间 sleep 触发上层 future.result 超时，导致误判失败。
         """

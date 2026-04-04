@@ -1,6 +1,6 @@
 {
     'name': 'MCP Server',
-    'version': '1.1.0',
+    'version': '18.0.1.0.0',
     'category': 'Services/MCP',
     'summary': 'MCP服务器模块',
     'description': """

@@ -1608,11 +1608,12 @@ class FastMCPService:
         # ===== KVPAC HMI / user directory read tools =====
         async def query_kvpac_directory_model(model_name, domain, field_names, limit, offset, ctx):
             """通过现有安全 Odoo 查询通道读取 KVPAC 目录模型。"""
-            auth_result = await check_auth(ctx)
-            if auth_result:
-                return auth_result
-            if limit < 1 or limit > 500 or offset < 0:
-                return {"status": "error", "message": "limit must be between 1 and 500; offset must be >= 0"}
+            is_authorized, user_id = await self._ensure_authorized_ctx(ctx, server_record.id, "", "")
+            if not is_authorized:
+                return {"status": "error", "code": 401, "message": "Unauthorized"}
+            if (type(limit) is not int or not 1 <= limit <= 500
+                    or type(offset) is not int or offset < 0):
+                return {"status": "error", "message": "limit must be an integer between 1 and 500; offset must be a non-negative integer"}
             try:
                 import json
                 result = await self._safe_execute_with_env(
@@ -1623,6 +1624,7 @@ class FastMCPService:
                     limit,
                     offset,
                     "name ASC, id ASC",
+                    uid=user_id,
                 )
                 if ctx:
                     data = result.get("data", {})

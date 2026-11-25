@@ -1605,6 +1605,107 @@ class FastMCPService:
                 _logger.error(error_msg)
                 return {"status": "error", "message": error_msg}
 
+        # ===== KVPAC HMI / user directory read tools =====
+        async def query_kvpac_directory_model(model_name, domain, field_names, limit, offset, ctx):
+            """通过现有安全 Odoo 查询通道读取 KVPAC 目录模型。"""
+            is_authorized, user_id = await self._ensure_authorized_ctx(ctx, server_record.id, "", "")
+            if not is_authorized:
+                return {"status": "error", "code": 401, "message": "Unauthorized"}
+            if (type(limit) is not int or not 1 <= limit <= 500
+                    or type(offset) is not int or offset < 0):
+                return {"status": "error", "message": "limit must be an integer between 1 and 500; offset must be a non-negative integer"}
+            try:
+                import json
+                result = await self._safe_execute_with_env(
+                    self._query_odoo_model_impl,
+                    model_name,
+                    json.dumps(domain, ensure_ascii=False),
+                    json.dumps(field_names, ensure_ascii=False),
+                    limit,
+                    offset,
+                    "name ASC, id ASC",
+                    uid=user_id,
+                )
+                if ctx:
+                    data = result.get("data", {})
+                    await ctx.info(
+                        "从 '%s' 查询到 %s 条记录（总计 %s）" % (
+                            model_name, data.get("count", 0), data.get("total_count", 0)
+                        )
+                    )
+                return result
+            except Exception as e:
+                error_msg = "查询 KVPAC 目录模型 '%s' 失败: %s" % (model_name, str(e))
+                if ctx:
+                    await ctx.error(error_msg)
+                _logger.error(error_msg)
+                return {"status": "error", "message": error_msg}
+
+        @mcp_server.tool()
+        async def get_hmi_widgets(
+                name: Optional[str] = None,
+                widget_name: Optional[str] = None,
+                state: Optional[str] = None,
+                limit: int = 100,
+                offset: int = 0,
+                ctx: Context = None
+        ) -> Dict[str, Any]:
+            """查询 KVPAC HMI 控件目录；不返回二进制预览图。"""
+            domain = []
+            if name:
+                domain.append(["name", "ilike", name])
+            if widget_name:
+                domain.append(["widget_name", "ilike", widget_name])
+            if state:
+                if state not in ("draft", "live", "expired"):
+                    return {"status": "error", "message": "state must be draft, live, or expired"}
+                domain.append(["state", "=", state])
+            return await query_kvpac_directory_model(
+                "kvpac.hmi.widgets", domain,
+                ["id", "name", "widget_name", "description", "state", "pb_def"],
+                limit, offset, ctx
+            )
+
+        @mcp_server.tool()
+        async def get_hmi_styles(
+                name: Optional[str] = None,
+                widget_name: Optional[str] = None,
+                state: Optional[str] = None,
+                limit: int = 100,
+                offset: int = 0,
+                ctx: Context = None
+        ) -> Dict[str, Any]:
+            """查询 KVPAC HMI 样式目录；不返回二进制预览图。"""
+            domain = []
+            if name:
+                domain.append(["name", "ilike", name])
+            if widget_name:
+                domain.append(["widget_name", "ilike", widget_name])
+            if state:
+                if state not in ("draft", "live", "expired"):
+                    return {"status": "error", "message": "state must be draft, live, or expired"}
+                domain.append(["state", "=", state])
+            return await query_kvpac_directory_model(
+                "kvpac.hmi.style", domain,
+                ["id", "name", "widget_name", "description", "state", "pb_def"],
+                limit, offset, ctx
+            )
+
+        @mcp_server.tool()
+        async def get_users(
+                name: Optional[str] = None,
+                limit: int = 100,
+                offset: int = 0,
+                ctx: Context = None
+        ) -> Dict[str, Any]:
+            """查询 KVPAC 用户目录（kvpac.user），仅返回 ID 和显示名称。"""
+            domain = []
+            if name:
+                domain.append(["name", "ilike", name])
+            return await query_kvpac_directory_model(
+                "kvpac.user", domain, ["id", "name"], limit, offset, ctx
+            )
+
         # ===== MCP资源管理工具 =====
         @mcp_server.tool()
         async def list_resources(
